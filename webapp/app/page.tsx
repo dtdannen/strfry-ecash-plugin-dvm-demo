@@ -31,11 +31,11 @@ export default function Home() {
 
       console.log('Mint quote:', mintQuote)
 
-      // Wait for the quote to be paid (fakewallet has a 1-3 second delay)
-      // Poll for up to 10 seconds
+      // Wait for the quote to be paid (fakewallet has no delay in demo mode)
+      // Poll for up to 3 seconds with 100ms intervals
       let mintQuoteChecked
       let attempts = 0
-      const maxAttempts = 10
+      const maxAttempts = 30
 
       while (attempts < maxAttempts) {
         mintQuoteChecked = await wallet.checkMintQuote(mintQuote.quote)
@@ -44,8 +44,8 @@ export default function Home() {
           break
         }
 
-        // Wait 1 second before checking again
-        await new Promise(resolve => setTimeout(resolve, 1000))
+        // Wait 100ms before checking again
+        await new Promise(resolve => setTimeout(resolve, 100))
         attempts++
       }
 
