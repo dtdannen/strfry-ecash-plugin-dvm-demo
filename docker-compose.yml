@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  strfry:
+    build:
+      context: ./strfry
+      dockerfile: Dockerfile
+    container_name: strfry-relay
+    ports:
+      - "7777:7777"
+    volumes:
+      # Mount configuration file
+      - ./strfry/strfry.conf:/opt/strfry/strfry.conf:ro
+      # Persist database
+      - strfry-db:/data/strfry-db
+      # Mount plugins directory (for your custom ecash plugin)
+      - ./strfry/plugins:/plugins
+    networks:
+      - nostr-network
+    restart: unless-stopped
+
+networks:
+  nostr-network:
+    driver: bridge
+
+volumes:
+  strfry-db:
