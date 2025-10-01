@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   strfry:
     build:
@@ -16,12 +14,25 @@ services:
       # Mount plugins directory (for your custom ecash plugin)
       - ./strfry/plugins:/plugins
     networks:
-      - nostr-network
+      - ecash-demo
     restart: unless-stopped
 
+  cdk-mint:
+    build: .
+    container_name: cdk-mint
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./config.toml:/root/.cdk-mintd/config.toml:ro
+      - mint-data:/root/.cdk-mintd/data
+    restart: unless-stopped
+    networks:
+      - ecash-demo
+
 networks:
-  nostr-network:
+  ecash-demo:
     driver: bridge
 
 volumes:
   strfry-db:
+  mint-data:
