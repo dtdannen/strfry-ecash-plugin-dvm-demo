@@ -1,0 +1,25 @@
+# CDK Mint Configuration for Demo
+
+[info]
+listen_host = "0.0.0.0"
+listen_port = 8085
+# Demo mnemonic seed (12 words) - DO NOT USE IN PRODUCTION
+mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+
+[mint_info]
+name = "Demo Ecash Mint"
+description = "Cashu mint for strfry-ecash-plugin-dvm-demo"
+description_long = "A demo Cashu mint using fakewallet backend for testing ecash-based rate limiting on Nostr DVMs"
+
+[database]
+engine = "sqlite"
+
+[ln]
+ln_backend = "fakewallet"
+
+[fake_wallet]
+supported_units = ["sat"]
+fee_percent = 0.02
+reserve_fee_min = 1
+min_delay_time = 1
+max_delay_time = 3

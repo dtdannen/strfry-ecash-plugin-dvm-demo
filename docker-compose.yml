@@ -1,0 +1,19 @@
+services:
+  cdk-mint:
+    build: .
+    container_name: cdk-mint
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./config.toml:/root/.cdk-mintd/config.toml:ro
+      - mint-data:/root/.cdk-mintd/data
+    restart: unless-stopped
+    networks:
+      - ecash-demo
+
+volumes:
+  mint-data:
+
+networks:
+  ecash-demo:
+    driver: bridge
