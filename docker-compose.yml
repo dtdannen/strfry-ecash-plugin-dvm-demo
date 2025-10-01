@@ -29,6 +29,21 @@ services:
     networks:
       - ecash-demo
 
+  webapp:
+    build:
+      context: ./webapp
+      dockerfile: Dockerfile
+    container_name: ecash-webapp
+    ports:
+      - "3000:3000"
+    environment:
+      - MINT_URL=http://cdk-mint:8085
+    depends_on:
+      - cdk-mint
+    networks:
+      - ecash-demo
+    restart: unless-stopped
+
 networks:
   ecash-demo:
     driver: bridge
