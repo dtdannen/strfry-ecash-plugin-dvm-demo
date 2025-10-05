@@ -2,7 +2,7 @@
 
 [info]
 listen_host = "0.0.0.0"
-listen_port = 8085
+listen_port = 8096
 # Demo mnemonic seed (12 words) - DO NOT USE IN PRODUCTION
 mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
 
@@ -12,7 +12,14 @@ description = "Cashu mint for strfry-ecash-plugin-dvm-demo"
 description_long = "A demo Cashu mint using fakewallet backend for testing ecash-based rate limiting on Nostr DVMs"
 
 [database]
-engine = "sqlite"
+engine = "postgres"
+
+[database.postgres]
+# PostgreSQL connection string
+url = "postgresql://mint:mint_password_change_in_production@postgres:5432/cdk_mint"
+tls_mode = "disable"
+max_connections = 20
+connection_timeout_seconds = 10
 
 [ln]
 ln_backend = "fakewallet"

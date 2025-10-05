@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: strfry-relay
     ports:
-      - "7777:7777"
+      - "7788:7777"
     volumes:
       # Mount configuration file
       - ./strfry/strfry.conf:/opt/strfry/strfry.conf:ro
@@ -17,14 +17,37 @@ services:
       - ecash-demo
     restart: unless-stopped
 
+  postgres:
+    image: postgres:17-alpine
+    container_name: mint-postgres
+    ports:
+      - "5443:5432"
+    environment:
+      POSTGRES_DB: cdk_mint
+      POSTGRES_USER: mint
+      POSTGRES_PASSWORD: mint_password_change_in_production
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - ecash-demo
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mint -d cdk_mint"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   cdk-mint:
     build: .
     container_name: cdk-mint
     ports:
-      - "8085:8085"
+      - "8096:8096"
     volumes:
       - ./config.toml:/root/.cdk-mintd/config.toml:ro
       - mint-data:/root/.cdk-mintd/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - ecash-demo
@@ -35,9 +58,9 @@ services:
       dockerfile: Dockerfile
     container_name: ecash-webapp
     ports:
-      - "3000:3000"
+      - "3011:3000"
     environment:
-      - MINT_URL=http://cdk-mint:8085
+      - MINT_URL=http://cdk-mint:8096
     depends_on:
       - cdk-mint
     networks:
@@ -51,3 +74,4 @@ networks:
 volumes:
   strfry-db:
   mint-data:
+  postgres-data:

@@ -21,7 +21,7 @@ export default function Home() {
   const [perfStatus, setPerfStatus] = useState('')
   const [tokenCount, setTokenCount] = useState(2) // 0=10, 1=100, 2=1000, 3=10000, 4=100000, 5=1000000
 
-  const MINT_URL = process.env.NEXT_PUBLIC_MINT_URL || 'http://localhost:8085'
+  const MINT_URL = process.env.NEXT_PUBLIC_MINT_URL || 'http://localhost:8096'
 
   // Helper to get actual token count from slider value
   const getTokenCount = () => Math.pow(10, tokenCount + 1)
