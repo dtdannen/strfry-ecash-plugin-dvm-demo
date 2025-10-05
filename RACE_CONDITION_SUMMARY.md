@@ -53,14 +53,46 @@ match result {
 3. **cdk/race_condition_test.rs** - Test case demonstrating the race condition
 4. **cdk/crates/cdk-sql-common/src/mint/mod.rs** - Fixed implementation
 
+## Update: Deadlock Issue (Now Fixed!)
+
+### Second Issue: PostgreSQL Deadlock
+
+After implementing the race condition fix, testing with 100 tokens revealed a new issue:
+
+**Problem**: PostgreSQL deadlock errors during concurrent payment insertions
+```
+ERROR: deadlock detected
+Process 40 waits for ShareLock on transaction 2013; blocked by process 48.
+Process 48 waits for ShareLock on transaction 2014; blocked by process 40.
+```
+
+**Root Cause**: The foreign key `FOREIGN KEY (quote_id) REFERENCES mint_quote(id)` acquires a `FOR KEY SHARE` lock on `mint_quote` during INSERT. Multiple concurrent inserts for the same quote created circular wait conditions.
+
+**Solution**: Lock the `mint_quote` row **first** with `FOR UPDATE` before INSERT:
+
+```rust
+// 1. Lock mint_quote row FIRST
+SELECT amount_paid FROM mint_quote WHERE id = :quote_id FOR UPDATE;
+
+// 2. Then insert payment (fails on duplicate payment_id)
+INSERT INTO mint_quote_payments (...);
+
+// 3. Update amount_paid
+UPDATE mint_quote SET amount_paid = ...;
+```
+
+This establishes consistent lock ordering across all transactions, preventing circular waits and deadlocks.
+
 ## Status
 
 - ✅ Root cause identified
 - ✅ Fix implemented in your local CDK clone
+- ✅ Deadlock issue identified and fixed
 - ✅ Code compiles successfully
 - ✅ Test case written
 - ✅ GitHub issue drafted
-- ⏳ Ready to rebuild Docker container and test
+- 🔄 Docker container building with fixes
+- ⏳ Ready to test with 100+ tokens
 - ⏳ Ready to submit PR to cashubtc/cdk
 
 ## Next Steps for PR Submission
