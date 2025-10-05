@@ -10,13 +10,13 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-# Clone the CDK repository
-RUN git clone https://github.com/cashubtc/cdk.git
+# Copy the local modified CDK repository
+COPY ./cdk /build/cdk
 
 WORKDIR /build/cdk
 
-# Build cdk-mintd with fakewallet feature
-RUN cargo build --release --package cdk-mintd --features fakewallet
+# Build cdk-mintd with fakewallet and postgres features
+RUN cargo build --release --package cdk-mintd --features "fakewallet postgres"
 
 # Runtime stage
 FROM debian:bookworm-slim
