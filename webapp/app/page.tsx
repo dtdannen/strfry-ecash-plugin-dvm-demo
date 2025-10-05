@@ -11,7 +11,20 @@ export default function Home() {
   const [mintError, setMintError] = useState('')
   const [spendResult, setSpendResult] = useState('')
 
+  // Performance testing state
+  const [perfMintProgress, setPerfMintProgress] = useState(0)
+  const [perfMintTime, setPerfMintTime] = useState(0)
+  const [perfSpendProgress, setPerfSpendProgress] = useState(0)
+  const [perfSpendTime, setPerfSpendTime] = useState(0)
+  const [perfMintedTokens, setPerfMintedTokens] = useState<string[]>([])
+  const [perfRunning, setPerfRunning] = useState(false)
+  const [perfStatus, setPerfStatus] = useState('')
+  const [tokenCount, setTokenCount] = useState(2) // 0=10, 1=100, 2=1000, 3=10000, 4=100000, 5=1000000
+
   const MINT_URL = process.env.NEXT_PUBLIC_MINT_URL || 'http://localhost:8085'
+
+  // Helper to get actual token count from slider value
+  const getTokenCount = () => Math.pow(10, tokenCount + 1)
 
   const handleMint = async () => {
     setMintLoading(true)
@@ -100,6 +113,128 @@ export default function Home() {
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(mintedToken)
+  }
+
+  const handlePerfMint = async () => {
+    const numTokens = getTokenCount()
+    setPerfRunning(true)
+    setPerfMintProgress(0)
+    setPerfMintTime(0)
+    setPerfMintedTokens([])
+    setPerfStatus(`Minting ${numTokens.toLocaleString()} tokens...`)
+
+    const startTime = Date.now()
+    const tokens: string[] = []
+
+    // Start timer
+    const timerInterval = setInterval(() => {
+      setPerfMintTime((Date.now() - startTime) / 1000)
+    }, 100)
+
+    try {
+      // Initialize mint and wallet once
+      const mint = new CashuMint(MINT_URL)
+      const wallet = new CashuWallet(mint)
+      await wallet.loadMint()
+
+      for (let i = 0; i < numTokens; i++) {
+        try {
+          // Request a mint quote for 1 sat
+          const mintQuote = await wallet.createMintQuote(1)
+
+          // Wait for the quote to be paid
+          let mintQuoteChecked
+          let attempts = 0
+          const maxAttempts = 30
+
+          while (attempts < maxAttempts) {
+            mintQuoteChecked = await wallet.checkMintQuote(mintQuote.quote)
+
+            if (mintQuoteChecked.state === MintQuoteState.PAID) {
+              break
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 100))
+            attempts++
+          }
+
+          if (mintQuoteChecked?.state !== MintQuoteState.PAID) {
+            throw new Error('Quote not paid after waiting')
+          }
+
+          // Mint tokens
+          const proofs = await wallet.mintProofs(1, mintQuote.quote)
+
+          // Encode the token
+          const token = getEncodedTokenV4({
+            mint: MINT_URL,
+            proofs: proofs
+          })
+
+          tokens.push(token)
+          setPerfMintProgress(i + 1)
+        } catch (error) {
+          console.error(`Error minting token ${i + 1}:`, error)
+          throw error
+        }
+      }
+
+      const totalTime = ((Date.now() - startTime) / 1000).toFixed(2)
+      setPerfMintedTokens(tokens)
+      setPerfStatus(`Successfully minted ${numTokens.toLocaleString()} tokens in ${totalTime}s`)
+    } catch (error) {
+      console.error('Performance mint error:', error)
+      setPerfStatus(`Error: ${error instanceof Error ? error.message : 'Failed to mint tokens'}`)
+    } finally {
+      clearInterval(timerInterval)
+      setPerfRunning(false)
+    }
+  }
+
+  const handlePerfSpend = async () => {
+    if (perfMintedTokens.length === 0) {
+      setPerfStatus('Error: No tokens to spend. Please mint tokens first.')
+      return
+    }
+
+    setPerfRunning(true)
+    setPerfSpendProgress(0)
+    setPerfSpendTime(0)
+    setPerfStatus('Spending tokens...')
+
+    const startTime = Date.now()
+
+    // Start timer
+    const timerInterval = setInterval(() => {
+      setPerfSpendTime((Date.now() - startTime) / 1000)
+    }, 100)
+
+    try {
+      // Initialize mint and wallet once
+      const mint = new CashuMint(MINT_URL)
+      const wallet = new CashuWallet(mint)
+      await wallet.loadMint()
+
+      for (let i = 0; i < perfMintedTokens.length; i++) {
+        try {
+          // Receive (spend) the token
+          await wallet.receive(perfMintedTokens[i])
+          setPerfSpendProgress(i + 1)
+        } catch (error) {
+          console.error(`Error spending token ${i + 1}:`, error)
+          throw error
+        }
+      }
+
+      const totalTime = ((Date.now() - startTime) / 1000).toFixed(2)
+      setPerfStatus(`Successfully spent ${perfMintedTokens.length.toLocaleString()} tokens in ${totalTime}s`)
+    } catch (error) {
+      console.error('Performance spend error:', error)
+      setPerfStatus(`Error: ${error instanceof Error ? error.message : 'Failed to spend tokens'}`)
+    } finally {
+      clearInterval(timerInterval)
+      setPerfRunning(false)
+    }
   }
 
   return (
@@ -199,6 +334,109 @@ export default function Home() {
               )}
             </div>
           </div>
+        </div>
+
+        {/* Performance Testing Section */}
+        <div className="mt-6 bg-white rounded-lg shadow-lg p-6">
+          <h2 className="text-2xl font-semibold text-gray-800 mb-4">
+            Performance Testing
+          </h2>
+          <p className="text-gray-600 mb-4">
+            Test the performance of minting and spending large batches of tokens
+          </p>
+
+          {/* Token Count Slider */}
+          <div className="mb-6 p-4 bg-gray-50 rounded-lg">
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              Number of tokens: <span className="text-blue-600 font-bold text-lg">{getTokenCount().toLocaleString()}</span>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="5"
+              value={tokenCount}
+              onChange={(e) => setTokenCount(parseInt(e.target.value))}
+              disabled={perfRunning}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
+              style={{
+                background: perfRunning ? undefined : `linear-gradient(to right, #2563eb 0%, #2563eb ${(tokenCount / 5) * 100}%, #e5e7eb ${(tokenCount / 5) * 100}%, #e5e7eb 100%)`
+              }}
+            />
+            <div className="flex justify-between text-xs text-gray-500 mt-2">
+              <span>10</span>
+              <span>100</span>
+              <span>1K</span>
+              <span>10K</span>
+              <span>100K</span>
+              <span>1M</span>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4 mb-6">
+            {/* Mint Performance */}
+            <div className="space-y-3">
+              <button
+                onClick={handlePerfMint}
+                disabled={perfRunning}
+                className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-3 px-4 rounded-lg transition duration-200"
+              >
+                Mint {getTokenCount().toLocaleString()} Tokens
+              </button>
+
+              {perfMintProgress > 0 && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Progress: {perfMintProgress.toLocaleString()}/{getTokenCount().toLocaleString()}</span>
+                    <span>Time: {perfMintTime.toFixed(1)}s</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-4">
+                    <div
+                      className="bg-blue-600 h-4 rounded-full transition-all duration-200"
+                      style={{ width: `${(perfMintProgress / getTokenCount()) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Spend Performance */}
+            <div className="space-y-3">
+              <button
+                onClick={handlePerfSpend}
+                disabled={perfRunning || perfMintedTokens.length === 0}
+                className="w-full bg-orange-600 hover:bg-orange-700 disabled:bg-gray-400 text-white font-semibold py-3 px-4 rounded-lg transition duration-200"
+              >
+                Spend All Tokens
+              </button>
+
+              {perfSpendProgress > 0 && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Progress: {perfSpendProgress.toLocaleString()}/{perfMintedTokens.length.toLocaleString()}</span>
+                    <span>Time: {perfSpendTime.toFixed(1)}s</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-4">
+                    <div
+                      className="bg-orange-600 h-4 rounded-full transition-all duration-200"
+                      style={{ width: `${(perfSpendProgress / perfMintedTokens.length) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {perfStatus && (
+            <div className={`px-4 py-3 rounded ${
+              perfStatus.includes('Error')
+                ? 'bg-red-100 border border-red-400 text-red-700'
+                : perfStatus.includes('Successfully')
+                ? 'bg-green-100 border border-green-400 text-green-700'
+                : 'bg-blue-100 border border-blue-400 text-blue-700'
+            }`}>
+              {perfStatus}
+            </div>
+          )}
         </div>
 
         <div className="mt-8 bg-white rounded-lg shadow-lg p-6">
