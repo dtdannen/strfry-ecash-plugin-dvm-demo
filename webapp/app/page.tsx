@@ -355,7 +355,15 @@ export default function Home() {
               min="0"
               max="5"
               value={tokenCount}
-              onChange={(e) => setTokenCount(parseInt(e.target.value))}
+              onChange={(e) => {
+                setTokenCount(parseInt(e.target.value))
+                // Clear visual state when slider changes
+                setPerfMintProgress(0)
+                setPerfSpendProgress(0)
+                setPerfMintTime(0)
+                setPerfSpendTime(0)
+                setPerfStatus('')
+              }}
               disabled={perfRunning}
               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer disabled:opacity-50"
               style={{
