@@ -1,9 +1,10 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import Navigation from './components/Navigation'
 
 export const metadata: Metadata = {
-  title: 'Ecash Mint Tester',
-  description: 'Test minting and spending ecash tokens',
+  title: 'Strfry Ecash DVM Performance Tests',
+  description: 'Test minting and spending ecash tokens and DVM interactions',
 }
 
 export default function RootLayout({
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <Navigation />
+        {children}
+      </body>
     </html>
   )
 }

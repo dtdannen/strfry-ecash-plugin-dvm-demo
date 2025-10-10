@@ -21,6 +21,9 @@ export default function Home() {
   const [perfStatus, setPerfStatus] = useState('')
   const [tokenCount, setTokenCount] = useState(2) // 0=10, 1=100, 2=1000, 3=10000, 4=100000, 5=1000000
 
+  // Sidebar state
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false)
+
   const MINT_URL = process.env.NEXT_PUBLIC_MINT_URL || 'http://localhost:8096'
 
   // Helper to get actual token count from slider value
@@ -238,14 +241,61 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-gray-800 mb-2 text-center">
-          Ecash Mint Tester
-        </h1>
-        <p className="text-gray-600 mb-8 text-center">
-          Test minting and spending Cashu ecash tokens
-        </p>
+    <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+      <div className="flex">
+        {/* Left Sidebar - Instructions Panel */}
+        <aside
+          className={`${
+            isPanelCollapsed ? 'w-12' : 'w-80'
+          } transition-all duration-300 ease-in-out bg-white shadow-lg flex-shrink-0`}
+        >
+          {isPanelCollapsed ? (
+            // Collapsed state - vertical tab
+            <div className="h-full flex items-center justify-center">
+              <button
+                onClick={() => setIsPanelCollapsed(false)}
+                className="writing-mode-vertical text-gray-600 hover:text-gray-900 font-medium py-8 transform rotate-180"
+                style={{ writingMode: 'vertical-rl' }}
+              >
+                Instructions →
+              </button>
+            </div>
+          ) : (
+            // Expanded state - full instructions
+            <div className="p-6 h-screen overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-800">
+                  How to use:
+                </h3>
+                <button
+                  onClick={() => setIsPanelCollapsed(true)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                  title="Collapse panel"
+                >
+                  ←
+                </button>
+              </div>
+              <ol className="list-decimal list-inside space-y-2 text-gray-600 mb-6">
+                <li>Click "Mint 1 Sat Token" to create a new ecash token</li>
+                <li>Copy the minted token using the "Copy" button</li>
+                <li>Paste the token in the "Spend Token" section</li>
+                <li>Click "Spend Token" to verify and redeem it with the mint</li>
+              </ol>
+              <div className="border-t border-gray-200 pt-4">
+                <p className="text-sm text-gray-500">
+                  Mint URL:
+                </p>
+                <code className="block bg-gray-100 px-2 py-1 rounded mt-2 text-xs break-all">
+                  {MINT_URL}
+                </code>
+              </div>
+            </div>
+          )}
+        </aside>
+
+        {/* Main Content Area */}
+        <div className="flex-1 p-8">
+          <div className="max-w-4xl mx-auto">
 
         <div className="grid md:grid-cols-2 gap-6">
           {/* Mint Section */}
@@ -446,20 +496,7 @@ export default function Home() {
             </div>
           )}
         </div>
-
-        <div className="mt-8 bg-white rounded-lg shadow-lg p-6">
-          <h3 className="text-lg font-semibold text-gray-800 mb-2">
-            How to use:
-          </h3>
-          <ol className="list-decimal list-inside space-y-2 text-gray-600">
-            <li>Click "Mint 1 Sat Token" to create a new ecash token</li>
-            <li>Copy the minted token using the "Copy" button</li>
-            <li>Paste the token in the "Spend Token" section</li>
-            <li>Click "Spend Token" to verify and redeem it with the mint</li>
-          </ol>
-          <p className="mt-4 text-sm text-gray-500">
-            Mint URL: <code className="bg-gray-100 px-2 py-1 rounded">{MINT_URL}</code>
-          </p>
+          </div>
         </div>
       </div>
     </main>
