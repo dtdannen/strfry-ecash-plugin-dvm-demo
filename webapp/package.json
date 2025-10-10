@@ -12,7 +12,8 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "next": "^14.2.18",
-    "@cashu/cashu-ts": "^2.7.2"
+    "@cashu/cashu-ts": "^2.7.2",
+    "nostr-tools": "^2.10.2"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

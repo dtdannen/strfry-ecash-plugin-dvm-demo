@@ -61,8 +61,26 @@ services:
       - "3011:3000"
     environment:
       - MINT_URL=http://cdk-mint:8096
+    volumes:
+      - dvm-data:/dvm-data:ro
     depends_on:
       - cdk-mint
+      - dvm-echo
+    networks:
+      - ecash-demo
+    restart: unless-stopped
+
+  dvm-echo:
+    build:
+      context: ./dvm
+      dockerfile: Dockerfile
+    container_name: dvm-echo
+    environment:
+      - RELAY_URL=ws://strfry:7777
+    volumes:
+      - dvm-data:/data
+    depends_on:
+      - strfry
     networks:
       - ecash-demo
     restart: unless-stopped
@@ -75,3 +93,4 @@ volumes:
   strfry-db:
   mint-data:
   postgres-data:
+  dvm-data:
