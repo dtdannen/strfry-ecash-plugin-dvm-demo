@@ -395,7 +395,7 @@ export default function Home() {
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm text-gray-600">
                     <span>Progress: {perfMintProgress.toLocaleString()}/{getTokenCount().toLocaleString()}</span>
-                    <span>Time: {perfMintTime.toFixed(1)}s</span>
+                    <span>Time: {perfMintTime.toFixed(1)}s{perfMintProgress > 0 && ` (avg ${((perfMintTime * 1000) / perfMintProgress).toFixed(0)} ms)`}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-4">
                     <div
@@ -421,7 +421,7 @@ export default function Home() {
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm text-gray-600">
                     <span>Progress: {perfSpendProgress.toLocaleString()}/{perfMintedTokens.length.toLocaleString()}</span>
-                    <span>Time: {perfSpendTime.toFixed(1)}s</span>
+                    <span>Time: {perfSpendTime.toFixed(1)}s{perfSpendProgress > 0 && ` (avg ${((perfSpendTime * 1000) / perfSpendProgress).toFixed(0)} ms)`}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-4">
                     <div
