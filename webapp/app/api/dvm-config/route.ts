@@ -2,12 +2,20 @@ import { NextResponse } from 'next/server'
 import { readFile } from 'fs/promises'
 import { existsSync } from 'fs'
 
+// Force dynamic rendering - don't cache this route
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   try {
     const envPath = '/dvm-data/.env'
 
+    // Debug logging
+    console.log('Checking for DVM config at:', envPath)
+    console.log('File exists:', existsSync(envPath))
+
     // Check if file exists
     if (!existsSync(envPath)) {
+      console.error('DVM config file not found')
       return NextResponse.json(
         { error: 'DVM configuration not found. Make sure the DVM container is running.' },
         { status: 404 }
