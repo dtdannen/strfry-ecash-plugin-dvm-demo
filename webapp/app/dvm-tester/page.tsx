@@ -61,6 +61,7 @@ export default function DVMTester() {
   const [requestType, setRequestType] = useState<'open' | 'targeted'>('targeted')
   const [manualLoading, setManualLoading] = useState(false)
   const [lastRequest, setLastRequest] = useState<JobRequest | null>(null)
+  const lastRequestRef = useRef<JobRequest | null>(null)
 
   // Performance test
   const [perfRequestCount, setPerfRequestCount] = useState(2) // 0=10, 1=100, 2=1000
@@ -250,23 +251,31 @@ export default function DVMTester() {
 
     console.log('Response for request ID:', requestId)
     console.log('Current lastRequest:', lastRequest)
+    console.log('Current lastRequestRef:', lastRequestRef.current)
 
     // Extract status
     const statusTag = event.tags.find(tag => tag[0] === 'status')
     const status = statusTag?.[1] || 'unknown'
 
+    // Check both ref and state for the request
+    const currentRequest = lastRequestRef.current || lastRequest
+
     // Update manual request if it matches
-    if (lastRequest && lastRequest.id === requestId) {
-      console.log('Updating lastRequest with response')
-      setLastRequest(prev => prev ? {
-        ...prev,
+    if (currentRequest && currentRequest.id === requestId) {
+      console.log('Updating request with response')
+      const updatedRequest = {
+        ...currentRequest,
         responseReceived: true,
-        responseTime: responseTime - prev.timestamp,
+        responseTime: responseTime - currentRequest.timestamp,
         responseContent: event.content,
         status
-      } : null)
+      }
+
+      // Update both ref and state
+      lastRequestRef.current = updatedRequest
+      setLastRequest(updatedRequest)
     } else {
-      console.log('Response does not match lastRequest')
+      console.log('Response does not match current request')
     }
 
     // Update performance test requests
@@ -329,22 +338,21 @@ export default function DVMTester() {
     // Small delay to ensure subscriptions are fully established
     await new Promise(resolve => setTimeout(resolve, 100))
 
-    // Generate a temporary ID to track the request
-    const tempId = Math.random().toString(36).substring(7)
-
-    // Set the request state BEFORE sending to avoid race condition
-    setLastRequest({
-      id: tempId,  // Will be updated with real ID
-      input: testInput,
-      timestamp: Date.now(),
-      responseReceived: false
-    })
-
     const eventId = await sendJobRequest(testInput, requestType === 'targeted')
 
     if (eventId) {
-      // Update with the real event ID
-      setLastRequest(prev => prev ? { ...prev, id: eventId } : null)
+      const requestObj = {
+        id: eventId,
+        input: testInput,
+        timestamp: Date.now(),
+        responseReceived: false
+      }
+
+      // Set both ref (immediate) and state (async)
+      lastRequestRef.current = requestObj
+      setLastRequest(requestObj)
+
+      console.log('Request set with ID:', eventId)
     }
 
     setManualLoading(false)
