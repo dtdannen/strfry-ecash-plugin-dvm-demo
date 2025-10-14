@@ -11,6 +11,17 @@ RUN npm ci
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
+
+# Accept build arguments for DVM configuration
+ARG NEXT_PUBLIC_DVM_NPUB
+ARG NEXT_PUBLIC_DVM_PUBKEY_HEX
+ARG NEXT_PUBLIC_RELAY_URL
+
+# Set them as environment variables for the build
+ENV NEXT_PUBLIC_DVM_NPUB=$NEXT_PUBLIC_DVM_NPUB
+ENV NEXT_PUBLIC_DVM_PUBKEY_HEX=$NEXT_PUBLIC_DVM_PUBKEY_HEX
+ENV NEXT_PUBLIC_RELAY_URL=$NEXT_PUBLIC_RELAY_URL
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 

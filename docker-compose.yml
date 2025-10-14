@@ -56,11 +56,18 @@ services:
     build:
       context: ./webapp
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_DVM_NPUB=npub13lx4ddje7jflxm6fhrt35gvhcczcm8radxr50vzcj0zu30w95thq3gfast
+        - NEXT_PUBLIC_DVM_PUBKEY_HEX=8fcd56b659f493f36f49b8d71a2197c6058d9c7d698747b05893c5c8bdc5a2ee
+        - NEXT_PUBLIC_RELAY_URL=ws://localhost:7788
     container_name: ecash-webapp
     ports:
       - "3011:3000"
     environment:
       - MINT_URL=http://cdk-mint:8096
+      - NEXT_PUBLIC_DVM_NPUB=npub13lx4ddje7jflxm6fhrt35gvhcczcm8radxr50vzcj0zu30w95thq3gfast
+      - NEXT_PUBLIC_DVM_PUBKEY_HEX=8fcd56b659f493f36f49b8d71a2197c6058d9c7d698747b05893c5c8bdc5a2ee
+      - NEXT_PUBLIC_RELAY_URL=ws://localhost:7788
     volumes:
       - dvm-data:/dvm-data:ro
     depends_on:

@@ -37,10 +37,22 @@ export default function DVMTester() {
   const [connected, setConnected] = useState(false)
   const [relayUrl] = useState('ws://localhost:7788')
 
-  // DVM monitoring
-  const [dvmConfig, setDvmConfig] = useState<DVMConfig | null>(null)
-  const [dvmConfigLoading, setDvmConfigLoading] = useState(true)
-  const [dvmConfigError, setDvmConfigError] = useState('')
+  // DVM monitoring - Configuration from environment variables (required)
+  const dvmNpub = process.env.NEXT_PUBLIC_DVM_NPUB
+  const dvmPubkeyHex = process.env.NEXT_PUBLIC_DVM_PUBKEY_HEX
+  const dvmRelayUrl = process.env.NEXT_PUBLIC_RELAY_URL
+
+  if (!dvmNpub || !dvmPubkeyHex || !dvmRelayUrl) {
+    throw new Error('DVM configuration environment variables are required: NEXT_PUBLIC_DVM_NPUB, NEXT_PUBLIC_DVM_PUBKEY_HEX, NEXT_PUBLIC_RELAY_URL')
+  }
+
+  const [dvmConfig] = useState<DVMConfig>({
+    npub: dvmNpub,
+    pubkeyHex: dvmPubkeyHex,
+    relayUrl: dvmRelayUrl
+  })
+  const [dvmConfigLoading] = useState(false)
+  const [dvmConfigError] = useState('')
   const [lastHeartbeat, setLastHeartbeat] = useState<HeartbeatInfo | null>(null)
   const [heartbeatCount, setHeartbeatCount] = useState(0)
 
@@ -65,32 +77,6 @@ export default function DVMTester() {
 
   // Get actual request count from slider value
   const getRequestCount = () => Math.pow(10, perfRequestCount + 1)
-
-  // Fetch DVM configuration on mount
-  useEffect(() => {
-    const fetchDVMConfig = async () => {
-      try {
-        setDvmConfigLoading(true)
-        const response = await fetch('/api/dvm-config')
-
-        if (!response.ok) {
-          const error = await response.json()
-          throw new Error(error.error || 'Failed to fetch DVM config')
-        }
-
-        const config = await response.json()
-        setDvmConfig(config)
-        setDvmConfigError('')
-      } catch (error) {
-        console.error('Error fetching DVM config:', error)
-        setDvmConfigError(error instanceof Error ? error.message : 'Failed to load DVM configuration')
-      } finally {
-        setDvmConfigLoading(false)
-      }
-    }
-
-    fetchDVMConfig()
-  }, [])
 
   // Initialize Nostr client and connect to relay
   useEffect(() => {
@@ -121,27 +107,36 @@ export default function DVMTester() {
     if (!poolRef.current || !clientKeysRef.current) return
 
     try {
+      console.log('Connecting to relay:', relayUrl)
+
       // Test connection by subscribing to a simple filter
       const testFilter: Filter = {
         kinds: [1],
         limit: 1
       }
 
-      // @ts-ignore - nostr-tools type issue
-      poolRef.current.subscribeMany([relayUrl], [testFilter],
+      console.log('Test filter:', JSON.stringify(testFilter))
+
+      // @ts-ignore - nostr-tools type signature
+      poolRef.current.subscribe(
+        [relayUrl],
+        testFilter,  // Pass filter directly, not as array
         {
           onevent: () => {
             // Got an event, connection works
+            console.log('Test subscription received event, marking as connected')
             setConnected(true)
           },
           oneose: () => {
+            console.log('Test subscription EOSE received, marking as connected')
             setConnected(true)
           }
         }
       )
 
-      // Also set up subscriptions for DVM events
-      setupDVMSubscriptions()
+      console.log('Test subscription created')
+
+      // Don't call setupDVMSubscriptions here - it will be called by useEffect when dvmConfig loads
 
     } catch (error) {
       console.error('Failed to connect to relay:', error)
@@ -150,9 +145,18 @@ export default function DVMTester() {
   }
 
   const setupDVMSubscriptions = () => {
-    if (!poolRef.current || !clientKeysRef.current || !dvmConfig) return
+    if (!poolRef.current || !clientKeysRef.current || !dvmConfig) {
+      console.log('setupDVMSubscriptions skipped:', {
+        hasPool: !!poolRef.current,
+        hasKeys: !!clientKeysRef.current,
+        hasDvmConfig: !!dvmConfig
+      })
+      return
+    }
 
     const dvmPubkeyHex = dvmConfig.pubkeyHex
+    console.log('Setting up DVM subscriptions for pubkey:', dvmPubkeyHex)
+    console.log('Client pubkey:', clientKeysRef.current.publicKey)
 
     // Subscribe to heartbeats from DVM (kind 11998)
     const heartbeatFilter: Filter = {
@@ -161,19 +165,34 @@ export default function DVMTester() {
       since: Math.floor(Date.now() / 1000)
     }
 
-    // @ts-ignore - nostr-tools type issue
-    poolRef.current.subscribeMany([relayUrl], [heartbeatFilter],
-      {
-        onevent: (event: NostrEvent) => {
-          console.log('Received heartbeat:', event)
-          setLastHeartbeat({
-            timestamp: event.created_at,
-            status: event.content
-          })
-          setHeartbeatCount(prev => prev + 1)
+    console.log('Subscribing to heartbeats with filter:', heartbeatFilter)
+
+    try {
+      console.log('Heartbeat filter object (not array!):', JSON.stringify(heartbeatFilter))
+
+      // Use subscribe (not subscribeMany) with a single filter object
+      // @ts-ignore - nostr-tools type signature issue
+      const heartbeatSub = (poolRef.current as any).subscribe(
+        [relayUrl],
+        heartbeatFilter,  // Pass filter directly, not as array
+        {
+          onevent: (event: NostrEvent) => {
+            console.log('Received heartbeat:', event)
+            setLastHeartbeat({
+              timestamp: event.created_at,
+              status: event.content
+            })
+            setHeartbeatCount(prev => prev + 1)
+          },
+          oneose: () => {
+            console.log('Heartbeat subscription EOSE received')
+          }
         }
-      }
-    )
+      )
+      console.log('Heartbeat subscription created')
+    } catch (e) {
+      console.error('Error creating heartbeat subscription:', e)
+    }
 
     // Subscribe to DVM responses (kind 25000) to our requests
     const responseFilter: Filter = {
@@ -183,15 +202,30 @@ export default function DVMTester() {
       since: Math.floor(Date.now() / 1000)
     }
 
-    // @ts-ignore - nostr-tools type issue
-    poolRef.current.subscribeMany([relayUrl], [responseFilter],
-      {
-        onevent: (event: NostrEvent) => {
-          console.log('Received DVM response:', event)
-          handleDVMResponse(event)
+    console.log('Subscribing to DVM responses with filter:', responseFilter)
+
+    try {
+      console.log('Response filter object (not array!):', JSON.stringify(responseFilter))
+
+      // Use subscribe (not subscribeMany) with a single filter object
+      // @ts-ignore - nostr-tools type signature issue
+      const responseSub = (poolRef.current as any).subscribe(
+        [relayUrl],
+        responseFilter,  // Pass filter directly, not as array
+        {
+          onevent: (event: NostrEvent) => {
+            console.log('Received DVM response:', event)
+            handleDVMResponse(event)
+          },
+          oneose: () => {
+            console.log('Response subscription EOSE received')
+          }
         }
-      }
-    )
+      )
+      console.log('Response subscription created')
+    } catch (e) {
+      console.error('Error creating response subscription:', e)
+    }
   }
 
   // Re-setup subscriptions when DVM config loads
@@ -202,12 +236,20 @@ export default function DVMTester() {
   }, [dvmConfig, connected])
 
   const handleDVMResponse = (event: NostrEvent) => {
+    console.log('handleDVMResponse called with event:', event)
+
     // Extract the request ID from e tag
     const eTag = event.tags.find(tag => tag[0] === 'e')
-    if (!eTag || !eTag[1]) return
+    if (!eTag || !eTag[1]) {
+      console.log('No e-tag found in response, skipping')
+      return
+    }
 
     const requestId = eTag[1]
     const responseTime = Date.now()
+
+    console.log('Response for request ID:', requestId)
+    console.log('Current lastRequest:', lastRequest)
 
     // Extract status
     const statusTag = event.tags.find(tag => tag[0] === 'status')
@@ -215,6 +257,7 @@ export default function DVMTester() {
 
     // Update manual request if it matches
     if (lastRequest && lastRequest.id === requestId) {
+      console.log('Updating lastRequest with response')
       setLastRequest(prev => prev ? {
         ...prev,
         responseReceived: true,
@@ -222,6 +265,8 @@ export default function DVMTester() {
         responseContent: event.content,
         status
       } : null)
+    } else {
+      console.log('Response does not match lastRequest')
     }
 
     // Update performance test requests
@@ -274,17 +319,32 @@ export default function DVMTester() {
   const handleManualTest = async () => {
     if (!testInput.trim()) return
 
+    if (!dvmConfig) {
+      console.error('DVM config not loaded yet')
+      return
+    }
+
     setManualLoading(true)
+
+    // Small delay to ensure subscriptions are fully established
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    // Generate a temporary ID to track the request
+    const tempId = Math.random().toString(36).substring(7)
+
+    // Set the request state BEFORE sending to avoid race condition
+    setLastRequest({
+      id: tempId,  // Will be updated with real ID
+      input: testInput,
+      timestamp: Date.now(),
+      responseReceived: false
+    })
 
     const eventId = await sendJobRequest(testInput, requestType === 'targeted')
 
     if (eventId) {
-      setLastRequest({
-        id: eventId,
-        input: testInput,
-        timestamp: Date.now(),
-        responseReceived: false
-      })
+      // Update with the real event ID
+      setLastRequest(prev => prev ? { ...prev, id: eventId } : null)
     }
 
     setManualLoading(false)
