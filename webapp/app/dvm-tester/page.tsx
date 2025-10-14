@@ -54,7 +54,6 @@ export default function DVMTester() {
   const [dvmConfigLoading] = useState(false)
   const [dvmConfigError] = useState('')
   const [lastHeartbeat, setLastHeartbeat] = useState<HeartbeatInfo | null>(null)
-  const [heartbeatCount, setHeartbeatCount] = useState(0)
 
   // Manual test
   const [testInput, setTestInput] = useState('')
@@ -68,7 +67,6 @@ export default function DVMTester() {
   const [perfRunning, setPerfRunning] = useState(false)
   const [perfProgress, setPerfProgress] = useState(0)
   const [perfRequests, setPerfRequests] = useState<JobRequest[]>([])
-  const [perfStartTime, setPerfStartTime] = useState(0)
   const [perfElapsedTime, setPerfElapsedTime] = useState(0)
 
   // Nostr client
@@ -183,7 +181,6 @@ export default function DVMTester() {
               timestamp: event.created_at,
               status: event.content
             })
-            setHeartbeatCount(prev => prev + 1)
           },
           oneose: () => {
             console.log('Heartbeat subscription EOSE received')
@@ -363,11 +360,13 @@ export default function DVMTester() {
     setPerfRunning(true)
     setPerfProgress(0)
     setPerfRequests([])
-    setPerfStartTime(Date.now())
 
-    // Start timer
+    // Capture start time in a local variable to avoid closure issue
+    const startTime = Date.now()
+
+    // Start timer - using local startTime variable instead of state
     const timerInterval = setInterval(() => {
-      setPerfElapsedTime((Date.now() - perfStartTime) / 1000)
+      setPerfElapsedTime((Date.now() - startTime) / 1000)
     }, 100)
 
     const requests: JobRequest[] = []
@@ -473,33 +472,20 @@ export default function DVMTester() {
                     ✓ Automatically loaded from DVM container
                   </p>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Public Key (Hex)
-                  </label>
-                  <div className="px-3 py-2 border border-gray-300 rounded-lg font-mono text-xs bg-gray-50 break-all">
-                    {dvmConfig.pubkeyHex}
-                  </div>
-                </div>
               </div>
 
               {/* Heartbeat Monitor */}
               <div className="border-t pt-4 mt-4">
                 <h3 className="font-semibold text-gray-800 mb-2">Heartbeat Monitor</h3>
-                <div className="grid md:grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="text-gray-600">Heartbeats Received</p>
-                    <p className="text-lg font-semibold">{heartbeatCount}</p>
+                {lastHeartbeat ? (
+                  <div className="text-sm">
+                    <p className="text-gray-600">Last Heartbeat</p>
+                    <p className="font-mono text-lg">{new Date(lastHeartbeat.timestamp * 1000).toLocaleTimeString()}</p>
+                    <p className="text-xs text-gray-500 mt-1">Status: {lastHeartbeat.status}</p>
                   </div>
-                  {lastHeartbeat && (
-                    <div>
-                      <p className="text-gray-600">Last Heartbeat</p>
-                      <p className="font-mono">{new Date(lastHeartbeat.timestamp * 1000).toLocaleTimeString()}</p>
-                      <p className="text-xs text-gray-500">Status: {lastHeartbeat.status}</p>
-                    </div>
-                  )}
-                </div>
+                ) : (
+                  <p className="text-sm text-gray-500">Waiting for heartbeat...</p>
+                )}
               </div>
             </>
           )}
@@ -640,7 +626,14 @@ export default function DVMTester() {
               <div className="space-y-2">
                 <div className="flex justify-between text-sm text-gray-600">
                   <span>Sent: {perfProgress.toLocaleString()}/{getRequestCount().toLocaleString()}</span>
-                  <span>Time: {perfElapsedTime.toFixed(1)}s</span>
+                  <span>
+                    Time: {perfElapsedTime.toFixed(1)}s
+                    {completedRequests.length > 0 && perfElapsedTime > 0 && (
+                      <span className="ml-1">
+                        ({(completedRequests.length / (perfElapsedTime * 1000)).toFixed(2)} jobs/ms)
+                      </span>
+                    )}
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-4">
                   <div
