@@ -627,29 +627,53 @@ export default function DVMTester() {
 
           {perfProgress > 0 && (
             <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm text-gray-600">
-                  <span>Sent: {perfProgress.toLocaleString()}/{getRequestCount().toLocaleString()}</span>
-                  <span>
-                    Time: {perfElapsedTime.toFixed(1)}s
-                    {perfElapsedTime > 0 && (
-                      <span className="ml-1">
-                        ({(perfProgress / (perfElapsedTime * 1000)).toFixed(2)} sent/ms, {(completedRequests.length / (perfElapsedTime * 1000)).toFixed(2)} completed/ms)
-                      </span>
-                    )}
-                  </span>
+              <div className="space-y-3">
+                {/* Time and rates */}
+                <div className="text-center text-sm text-gray-600">
+                  <span className="font-semibold">Time: {perfElapsedTime.toFixed(1)}s</span>
+                  {perfElapsedTime > 0 && (
+                    <span className="ml-2">
+                      ({(perfProgress / (perfElapsedTime * 1000)).toFixed(2)} sent/ms, {(completedRequests.length / (perfElapsedTime * 1000)).toFixed(2)} completed/ms)
+                    </span>
+                  )}
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-4">
-                  <div
-                    className="bg-blue-600 h-4 rounded-full transition-all duration-200"
-                    style={{ width: `${(perfProgress / getRequestCount()) * 100}%` }}
-                  />
+
+                {/* Sending Progress */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-gray-600">
+                    <span className="font-medium">Sending</span>
+                    <span>{perfProgress.toLocaleString()}/{getRequestCount().toLocaleString()}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div
+                      className="bg-blue-600 h-3 rounded-full transition-all duration-200"
+                      style={{ width: `${(perfProgress / getRequestCount()) * 100}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Receiving Progress */}
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-gray-600">
+                    <span className="font-medium">Receiving</span>
+                    <span>{completedRequests.length.toLocaleString()}/{getRequestCount().toLocaleString()}</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div
+                      className="bg-green-600 h-3 rounded-full transition-all duration-200"
+                      style={{ width: `${(completedRequests.length / getRequestCount()) * 100}%` }}
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div className="grid md:grid-cols-3 gap-4 text-sm bg-gray-50 p-4 rounded-lg">
+              <div className="grid md:grid-cols-4 gap-4 text-sm bg-gray-50 p-4 rounded-lg">
                 <div>
-                  <p className="text-gray-600">Responses Received</p>
+                  <p className="text-gray-600">Sent</p>
+                  <p className="text-lg font-semibold">{perfProgress.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Received</p>
                   <p className="text-lg font-semibold">{completedRequests.length.toLocaleString()}</p>
                 </div>
                 <div>
