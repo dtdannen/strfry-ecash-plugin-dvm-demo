@@ -400,6 +400,8 @@ export default function DVMTester() {
     } catch (error) {
       console.error('Performance test error:', error)
     } finally {
+      // Force one final update of elapsed time before clearing
+      setPerfElapsedTime((Date.now() - startTime) / 1000)
       clearInterval(timerInterval)
       setPerfRunning(false)
     }
@@ -630,9 +632,9 @@ export default function DVMTester() {
                   <span>Sent: {perfProgress.toLocaleString()}/{getRequestCount().toLocaleString()}</span>
                   <span>
                     Time: {perfElapsedTime.toFixed(1)}s
-                    {completedRequests.length > 0 && perfElapsedTime > 0 && (
+                    {perfElapsedTime > 0 && (
                       <span className="ml-1">
-                        ({(completedRequests.length / (perfElapsedTime * 1000)).toFixed(2)} jobs/ms)
+                        ({(perfProgress / (perfElapsedTime * 1000)).toFixed(2)} sent/ms, {(completedRequests.length / (perfElapsedTime * 1000)).toFixed(2)} completed/ms)
                       </span>
                     )}
                   </span>
