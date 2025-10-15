@@ -450,10 +450,29 @@ export default function DVMTester() {
     } catch (error) {
       console.error('Performance test error:', error)
     } finally {
-      // Force one final update of elapsed time before clearing
-      setPerfElapsedTime((Date.now() - startTime) / 1000)
-      clearInterval(timerInterval)
+      // Don't stop the timer here - let it run until all responses are received
       setPerfRunning(false)
+
+      // Stop the timer when all responses are received or after timeout
+      const stopTimer = () => {
+        setPerfElapsedTime((Date.now() - startTime) / 1000)
+        clearInterval(timerInterval)
+      }
+
+      // Check if all responses are already received
+      const checkComplete = setInterval(() => {
+        const totalReceived = perfRequestsRef.current.filter(r => r.responseReceived).length
+        if (totalReceived === perfRequestsRef.current.length) {
+          clearInterval(checkComplete)
+          stopTimer()
+        }
+      }, 100)
+
+      // Timeout after 60 seconds
+      setTimeout(() => {
+        clearInterval(checkComplete)
+        stopTimer()
+      }, 60000)
     }
   }
 
