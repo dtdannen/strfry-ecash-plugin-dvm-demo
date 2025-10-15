@@ -69,6 +69,7 @@ export default function DVMTester() {
   const [perfRequests, setPerfRequests] = useState<JobRequest[]>([])
   const perfRequestsRef = useRef<JobRequest[]>([])  // Use ref to avoid race conditions
   const [perfElapsedTime, setPerfElapsedTime] = useState(0)
+  const perfTimingRef = useRef<{ firstSentAt: number; lastReceivedAt: number }>({ firstSentAt: 0, lastReceivedAt: 0 })
 
   // Nostr client
   const poolRef = useRef<SimplePool | null>(null)
@@ -284,6 +285,9 @@ export default function DVMTester() {
       refRequest.responseTime = responseTime - refRequest.timestamp
       refRequest.responseContent = event.content
       refRequest.status = status
+
+      // Track last response time for throughput calculation
+      perfTimingRef.current.lastReceivedAt = responseTime
     }
 
     // Then update state for UI (using functional update to avoid race conditions)
@@ -372,6 +376,7 @@ export default function DVMTester() {
     setPerfProgress(0)
     setPerfRequests([])
     perfRequestsRef.current = []  // Reset the ref
+    perfTimingRef.current = { firstSentAt: 0, lastReceivedAt: 0 }  // Reset timing
     setPerfElapsedTime(0)
 
     // Capture start time in a local variable to avoid closure issue
@@ -393,6 +398,11 @@ export default function DVMTester() {
             input,
             timestamp: Date.now(),
             responseReceived: false
+          }
+
+          // Track first request send time
+          if (i === 0) {
+            perfTimingRef.current.firstSentAt = newRequest.timestamp
           }
 
           // Add to ref for accurate tracking
@@ -418,6 +428,16 @@ export default function DVMTester() {
       const checkResponses = () => {
         const totalReceived = perfRequestsRef.current.filter(r => r.responseReceived).length
         console.log(`Performance test status: ${totalReceived}/${totalSent} responses received`)
+
+        // When all responses are received, calculate throughput
+        if (totalReceived === totalSent && perfTimingRef.current.firstSentAt && perfTimingRef.current.lastReceivedAt) {
+          const totalTime = perfTimingRef.current.lastReceivedAt - perfTimingRef.current.firstSentAt
+          const avgTimePerJob = totalTime / totalSent
+          console.log(`✅ All responses received!`)
+          console.log(`Total time: ${totalTime}ms (from first send to last receive)`)
+          console.log(`Average time per job: ${avgTimePerJob.toFixed(2)}ms`)
+          console.log(`Throughput: ${(totalSent / (totalTime / 1000)).toFixed(2)} jobs/sec`)
+        }
       }
 
       // Check responses periodically for debugging
@@ -439,9 +459,20 @@ export default function DVMTester() {
 
   // Calculate performance metrics
   const completedRequests = perfRequests.filter(r => r.responseReceived)
-  const avgResponseTime = completedRequests.length > 0
-    ? completedRequests.reduce((sum, r) => sum + (r.responseTime || 0), 0) / completedRequests.length
-    : 0
+
+  // Calculate throughput-based average (total time / total jobs)
+  const avgTimePerJob = (() => {
+    if (completedRequests.length === 0) return 0
+
+    // If we have timing info, use throughput calculation
+    if (perfTimingRef.current.firstSentAt && perfTimingRef.current.lastReceivedAt) {
+      const totalTime = perfTimingRef.current.lastReceivedAt - perfTimingRef.current.firstSentAt
+      return totalTime / completedRequests.length
+    }
+
+    // Fallback to old calculation if no timing info yet
+    return completedRequests.reduce((sum, r) => sum + (r.responseTime || 0), 0) / completedRequests.length
+  })()
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-8">
@@ -713,8 +744,8 @@ export default function DVMTester() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-gray-600">Avg Response Time</p>
-                  <p className="text-lg font-semibold">{avgResponseTime.toFixed(0)} ms</p>
+                  <p className="text-gray-600">Avg Time/Job</p>
+                  <p className="text-lg font-semibold">{avgTimePerJob.toFixed(0)} ms</p>
                 </div>
               </div>
             </div>
