@@ -360,6 +360,7 @@ export default function DVMTester() {
     setPerfRunning(true)
     setPerfProgress(0)
     setPerfRequests([])
+    setPerfElapsedTime(0)
 
     // Capture start time in a local variable to avoid closure issue
     const startTime = Date.now()
@@ -386,6 +387,13 @@ export default function DVMTester() {
           setPerfProgress(i + 1)
           setPerfRequests([...requests])
         }
+
+        // Yield control back to React periodically to allow UI updates
+        // For small counts, yield every request; for large counts, yield every 10
+        const yieldFrequency = count <= 100 ? 1 : 10
+        if ((i + 1) % yieldFrequency === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
       }
 
       console.log(`Sent ${requests.length} job requests`)
@@ -407,31 +415,26 @@ export default function DVMTester() {
     <main className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-8">
       <div className="max-w-6xl mx-auto space-y-6">
 
-        {/* Connection Status */}
+        {/* DVM Status - Combined Connection and Configuration */}
         <div className="bg-white rounded-lg shadow-lg p-6">
           <h2 className="text-2xl font-bold text-gray-800 mb-4">
-            Connection Status
+            DVM Status
           </h2>
-          <div className="grid md:grid-cols-2 gap-4">
+
+          {/* Connection Info */}
+          <div className="grid md:grid-cols-2 gap-4 mb-4">
             <div>
               <p className="text-sm text-gray-600">Relay URL</p>
               <p className="font-mono text-sm">{relayUrl}</p>
             </div>
             <div>
-              <p className="text-sm text-gray-600">Status</p>
+              <p className="text-sm text-gray-600">Connection</p>
               <div className="flex items-center gap-2">
                 <div className={`w-3 h-3 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span className="font-semibold">{connected ? 'Connected' : 'Disconnected'}</span>
               </div>
             </div>
           </div>
-        </div>
-
-        {/* DVM Configuration */}
-        <div className="bg-white rounded-lg shadow-lg p-6">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">
-            DVM Configuration
-          </h2>
 
           {dvmConfigLoading && (
             <div className="flex items-center justify-center py-8">
@@ -449,43 +452,42 @@ export default function DVMTester() {
 
           {dvmConfig && (
             <>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    DVM Public Key (npub)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={dvmConfig.npub}
-                      readOnly
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm bg-gray-50"
-                    />
-                    <button
-                      onClick={() => navigator.clipboard.writeText(dvmConfig.npub)}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition"
-                    >
-                      Copy
-                    </button>
+              {/* DVM Info */}
+              <div className="border-t pt-4">
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">
+                      DVM Public Key (npub)
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={dvmConfig.npub}
+                        readOnly
+                        className="flex-1 px-2 py-1 border border-gray-300 rounded font-mono text-xs bg-gray-50"
+                      />
+                      <button
+                        onClick={() => navigator.clipboard.writeText(dvmConfig.npub)}
+                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition"
+                      >
+                        Copy
+                      </button>
+                    </div>
                   </div>
-                  <p className="mt-2 text-xs text-gray-500">
-                    ✓ Automatically loaded from DVM container
-                  </p>
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">
+                      Last Heartbeat
+                    </label>
+                    {lastHeartbeat ? (
+                      <div>
+                        <p className="font-mono text-lg">{new Date(lastHeartbeat.timestamp * 1000).toLocaleTimeString()}</p>
+                        <p className="text-xs text-gray-500">Status: {lastHeartbeat.status}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">Waiting for heartbeat...</p>
+                    )}
+                  </div>
                 </div>
-              </div>
-
-              {/* Heartbeat Monitor */}
-              <div className="border-t pt-4 mt-4">
-                <h3 className="font-semibold text-gray-800 mb-2">Heartbeat Monitor</h3>
-                {lastHeartbeat ? (
-                  <div className="text-sm">
-                    <p className="text-gray-600">Last Heartbeat</p>
-                    <p className="font-mono text-lg">{new Date(lastHeartbeat.timestamp * 1000).toLocaleTimeString()}</p>
-                    <p className="text-xs text-gray-500 mt-1">Status: {lastHeartbeat.status}</p>
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-500">Waiting for heartbeat...</p>
-                )}
               </div>
             </>
           )}
