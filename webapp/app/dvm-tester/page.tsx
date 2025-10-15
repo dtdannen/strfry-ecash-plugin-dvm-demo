@@ -67,6 +67,7 @@ export default function DVMTester() {
   const [perfRunning, setPerfRunning] = useState(false)
   const [perfProgress, setPerfProgress] = useState(0)
   const [perfRequests, setPerfRequests] = useState<JobRequest[]>([])
+  const perfRequestsRef = useRef<JobRequest[]>([])  // Use ref to avoid race conditions
   const [perfElapsedTime, setPerfElapsedTime] = useState(0)
 
   // Nostr client
@@ -275,7 +276,17 @@ export default function DVMTester() {
       console.log('Response does not match current request')
     }
 
-    // Update performance test requests
+    // Update performance test requests - check both ref and state
+    // First update the ref (for accurate real-time tracking)
+    const refRequest = perfRequestsRef.current.find(req => req.id === requestId)
+    if (refRequest && !refRequest.responseReceived) {
+      refRequest.responseReceived = true
+      refRequest.responseTime = responseTime - refRequest.timestamp
+      refRequest.responseContent = event.content
+      refRequest.status = status
+    }
+
+    // Then update state for UI (using functional update to avoid race conditions)
     setPerfRequests(prev => prev.map(req =>
       req.id === requestId
         ? {
@@ -360,6 +371,7 @@ export default function DVMTester() {
     setPerfRunning(true)
     setPerfProgress(0)
     setPerfRequests([])
+    perfRequestsRef.current = []  // Reset the ref
     setPerfElapsedTime(0)
 
     // Capture start time in a local variable to avoid closure issue
@@ -370,22 +382,25 @@ export default function DVMTester() {
       setPerfElapsedTime((Date.now() - startTime) / 1000)
     }, 100)
 
-    const requests: JobRequest[] = []
-
     try {
       for (let i = 0; i < count; i++) {
         const input = `Test message ${i + 1}`
         const eventId = await sendJobRequest(input, true)
 
         if (eventId) {
-          requests.push({
+          const newRequest: JobRequest = {
             id: eventId,
             input,
             timestamp: Date.now(),
             responseReceived: false
-          })
+          }
+
+          // Add to ref for accurate tracking
+          perfRequestsRef.current.push(newRequest)
+
+          // Update state using functional update to avoid overwrites
+          setPerfRequests(prev => [...prev, newRequest])
           setPerfProgress(i + 1)
-          setPerfRequests([...requests])
         }
 
         // Yield control back to React periodically to allow UI updates
@@ -396,7 +411,22 @@ export default function DVMTester() {
         }
       }
 
-      console.log(`Sent ${requests.length} job requests`)
+      console.log(`Sent ${perfRequestsRef.current.length} job requests`)
+
+      // Log status after sending
+      const totalSent = perfRequestsRef.current.length
+      const checkResponses = () => {
+        const totalReceived = perfRequestsRef.current.filter(r => r.responseReceived).length
+        console.log(`Performance test status: ${totalReceived}/${totalSent} responses received`)
+      }
+
+      // Check responses periodically for debugging
+      const responseCheckInterval = setInterval(checkResponses, 1000)
+      setTimeout(() => {
+        clearInterval(responseCheckInterval)
+        checkResponses() // Final check
+      }, 30000) // Stop checking after 30 seconds
+
     } catch (error) {
       console.error('Performance test error:', error)
     } finally {
