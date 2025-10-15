@@ -92,6 +92,21 @@ services:
       - ecash-demo
     restart: unless-stopped
 
+  dvm-encrypted:
+    build:
+      context: ./encrypted_dvm
+      dockerfile: Dockerfile
+    container_name: dvm-encrypted
+    environment:
+      - RELAY_URL=ws://strfry:7777
+    volumes:
+      - dvm-encrypted-data:/data
+    depends_on:
+      - strfry
+    networks:
+      - ecash-demo
+    restart: unless-stopped
+
 networks:
   ecash-demo:
     driver: bridge
@@ -101,3 +116,4 @@ volumes:
   mint-data:
   postgres-data:
   dvm-data:
+  dvm-encrypted-data:
