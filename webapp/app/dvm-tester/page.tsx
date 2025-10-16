@@ -38,6 +38,7 @@ interface JobRequest {
   responseContent?: string
   status?: string
   isEncrypted?: boolean
+  matchedRequestId?: string
 }
 
 export default function DVMTester() {
@@ -382,23 +383,30 @@ export default function DVMTester() {
       const requestId = eTag?.[1]
       const responseTime = Date.now()
 
+      console.log('Response references request ID:', requestId)
+      console.log('Current tracked request ID:', encryptedLastRequestRef.current?.id || encryptedLastRequest?.id)
+
       // Extract status
       const statusTag = decrypted.message.tags?.find(tag => tag[0] === 'status')
       const status = statusTag?.[1] || 'unknown'
 
-      // Update manual request
+      // Update manual request - match by the unsigned event ID
       const currentRequest = encryptedLastRequestRef.current || encryptedLastRequest
-      if (currentRequest && (!requestId || currentRequest.id === requestId)) {
+      if (currentRequest && requestId && currentRequest.id === requestId) {
+        console.log('✅ Request ID match confirmed! Updating UI...')
         const updatedRequest = {
           ...currentRequest,
           responseReceived: true,
           responseTime: responseTime - currentRequest.timestamp,
           responseContent: decrypted.message.content,
           status,
-          isEncrypted: true
+          isEncrypted: true,
+          matchedRequestId: requestId  // Store the matched ID for display
         }
         encryptedLastRequestRef.current = updatedRequest
         setEncryptedLastRequest(updatedRequest)
+      } else {
+        console.log('❌ Request ID mismatch or missing - response not matched to a request')
       }
 
       // Update performance test requests
@@ -479,7 +487,7 @@ export default function DVMTester() {
       const content = `Encrypted job request: ${input}`
 
       // Encrypt using NIP-17
-      const giftWrapEvent = await encryptNip17Message(
+      const { giftWrap, unsignedEventId } = await encryptNip17Message(
         clientKeysRef.current.privateKeyHex,
         encryptedDvmConfig.pubkeyHex,
         content,
@@ -488,11 +496,12 @@ export default function DVMTester() {
       )
 
       // Publish the gift wrap
-      poolRef.current.publish([relayUrl], giftWrapEvent)
-      console.log('Published encrypted job request (gift wrap):', giftWrapEvent)
+      poolRef.current.publish([relayUrl], giftWrap)
+      console.log('Published encrypted job request (gift wrap):', giftWrap)
+      console.log('Unsigned event ID (for response matching):', unsignedEventId)
 
-      // Return a pseudo ID for tracking (we don't have the real inner event ID)
-      return giftWrapEvent.id
+      // Return the unsigned event ID - this is what the DVM will reference in its response
+      return unsignedEventId
     } catch (error) {
       console.error('Failed to send encrypted request:', error)
       return null
@@ -993,6 +1002,7 @@ export default function DVMTester() {
                     <div className="space-y-1 text-sm">
                       <p><span className="text-gray-600">Input:</span> {encryptedLastRequest.input}</p>
                       <p><span className="text-gray-600">Encryption:</span> <span className="text-green-600">🔐 NIP-17</span></p>
+                      <p><span className="text-gray-600">Request ID:</span> <span className="font-mono text-xs">{encryptedLastRequest.id.substring(0, 16)}...</span></p>
                       <p><span className="text-gray-600">Status:</span> {
                         encryptedLastRequest.responseReceived
                           ? <span className="text-green-600 font-semibold">✓ Response decrypted</span>
@@ -1000,6 +1010,11 @@ export default function DVMTester() {
                       }</p>
                       {encryptedLastRequest.responseReceived && (
                         <>
+                          <p><span className="text-gray-600">ID Match:</span> {
+                            encryptedLastRequest.matchedRequestId === encryptedLastRequest.id
+                              ? <span className="text-green-600 font-semibold">✅ Verified - Response matched to request {encryptedLastRequest.id.substring(0, 16)}...</span>
+                              : <span className="text-red-600">❌ Mismatch</span>
+                          }</p>
                           <p><span className="text-gray-600">Response:</span> {encryptedLastRequest.responseContent}</p>
                           <p><span className="text-gray-600">Time:</span> {encryptedLastRequest.responseTime}ms</p>
                         </>

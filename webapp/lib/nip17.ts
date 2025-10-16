@@ -10,9 +10,9 @@ import {
   generateSecretKey,
   getPublicKey,
   finalizeEvent,
-  nip19,
   nip44,
-  type UnsignedEvent
+  type UnsignedEvent,
+  getEventHash
 } from 'nostr-tools'
 
 // Helper function to convert hex string to Uint8Array
@@ -28,7 +28,7 @@ function hexToBytes(hex: string): Uint8Array {
  * @param content - The message content
  * @param tags - Optional tags for the message
  * @param kind - The kind of the inner message (default: 25000 for DVM)
- * @returns The gift wrap event ready to be sent
+ * @returns Object containing the gift wrap event and the unsigned message event ID
  */
 export async function encryptNip17Message(
   senderPrivkey: string,
@@ -36,7 +36,7 @@ export async function encryptNip17Message(
   content: string,
   tags: string[][] = [],
   kind: number = 25000
-): Promise<NostrEvent> {
+): Promise<{ giftWrap: NostrEvent; unsignedEventId: string }> {
   // Convert hex private key to Uint8Array for nostr-tools
   const senderPrivkeyBytes = hexToBytes(senderPrivkey)
   const senderPubkey = getPublicKey(senderPrivkeyBytes)
@@ -49,6 +49,9 @@ export async function encryptNip17Message(
     created_at: Math.floor(Date.now() / 1000),
     pubkey: senderPubkey
   }
+
+  // Calculate the ID of the unsigned event (this is what the DVM will reference)
+  const unsignedEventId = getEventHash(messageEvent)
 
   // Convert to JSON for encryption
   const messageJson = JSON.stringify(messageEvent)
@@ -98,7 +101,10 @@ export async function encryptNip17Message(
   // Sign with the same random key
   const finalGiftWrap = finalizeEvent(giftWrapEvent, randomPrivkeyBytes)
 
-  return finalGiftWrap
+  return {
+    giftWrap: finalGiftWrap,
+    unsignedEventId: unsignedEventId
+  }
 }
 
 /**

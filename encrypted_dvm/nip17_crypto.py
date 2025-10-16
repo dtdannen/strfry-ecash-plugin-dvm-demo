@@ -21,6 +21,7 @@ from nostr_sdk import (
     Tag,
     Timestamp,
     Event,
+    EventId,
     NostrSigner,
     nip44_encrypt,
     nip44_decrypt,
@@ -252,6 +253,27 @@ async def decrypt_nip17_gift_wrap(
             class SimpleEvent:
                 def __init__(self, data):
                     self.data = data
+                    # Calculate the event ID for this unsigned event
+                    self._event_id = self._calculate_event_id()
+
+                def _calculate_event_id(self):
+                    """Calculate the event ID according to NIP-01"""
+                    import hashlib
+                    # Create the canonical event format for hashing [0, pubkey, created_at, kind, tags, content]
+                    canonical = [
+                        0,  # Reserved for future use
+                        self.data.get('pubkey', ''),
+                        self.data.get('created_at', 0),
+                        self.data.get('kind', 0),
+                        self.data.get('tags', []),
+                        self.data.get('content', '')
+                    ]
+                    # Serialize to JSON without spaces
+                    canonical_json = json.dumps(canonical, separators=(',', ':'), ensure_ascii=False)
+                    # Calculate SHA256 hash
+                    event_id_hex = hashlib.sha256(canonical_json.encode('utf-8')).hexdigest()
+                    # Create EventId from hex string
+                    return EventId.parse(event_id_hex)
 
                 def content(self):
                     return self.data.get('content', '')
@@ -274,10 +296,7 @@ async def decrypt_nip17_gift_wrap(
                     return SimpleTags(self.data.get('tags', []))
 
                 def id(self):
-                    class SimpleId:
-                        def to_hex(self):
-                            return "unsigned"
-                    return SimpleId()
+                    return self._event_id
 
             message_event = SimpleEvent(message_data)
 
