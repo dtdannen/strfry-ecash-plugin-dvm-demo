@@ -1,6 +1,6 @@
 FROM ubuntu:22.04
 
-# Install build dependencies
+# Install build dependencies and Python
 RUN apt-get update && apt-get install -y \
     git \
     g++ \
@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     libyaml-perl \
     libtemplate-perl \
     libregexp-grammars-perl \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
 # Clone and build strfry
@@ -25,6 +27,14 @@ RUN git clone https://github.com/hoytech/strfry && cd strfry/ && \
 
 # Create directories for data and plugins
 RUN mkdir -p /data/strfry-db /plugins
+
+# Install Python dependencies for ecash plugin
+COPY plugins/requirements.txt /tmp/plugin-requirements.txt
+RUN pip3 install -r /tmp/plugin-requirements.txt
+
+# Copy plugin files
+COPY plugins/*.py /plugins/
+RUN chmod +x /plugins/*.py
 
 WORKDIR /opt/strfry
 

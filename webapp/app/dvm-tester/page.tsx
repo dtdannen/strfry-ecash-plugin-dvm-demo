@@ -14,6 +14,7 @@ import {
   encryptNip17Message,
   decryptNip17GiftWrap
 } from '../../lib/nip17'
+import { DVMEcashColumn } from './dvm-ecash-column'
 
 interface DVMConfig {
   npub: string
@@ -45,7 +46,8 @@ interface JobRequest {
 export default function DVMTester() {
   // Connection state
   const [connected, setConnected] = useState(false)
-  const [relayUrl] = useState('ws://localhost:7788')
+  const [relayUrl] = useState(process.env.NEXT_PUBLIC_RELAY_URL || 'ws://localhost:7789')
+  const [ecashRelayUrl] = useState(process.env.NEXT_PUBLIC_ECASH_RELAY_URL || 'ws://localhost:7788')
 
   // Plain DVM configuration from environment variables
   const plainDvmNpub = process.env.NEXT_PUBLIC_DVM_NPUB
@@ -720,12 +722,12 @@ export default function DVMTester() {
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-8">
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="max-w-full mx-auto px-4 space-y-6">
 
-        <h1 className="text-3xl font-bold text-gray-800 mb-6">DVM Tester - Plain & Encrypted</h1>
+        <h1 className="text-3xl font-bold text-gray-800 mb-6">DVM Tester - Plain, Encrypted & Ecash</h1>
 
-        {/* Two column layout for DVM cards */}
-        <div className="grid lg:grid-cols-2 gap-6">
+        {/* Three column layout for DVM cards */}
+        <div className="grid lg:grid-cols-3 gap-6">
 
           {/* Plain DVM Column */}
           <div className="space-y-6">
@@ -1121,6 +1123,15 @@ export default function DVMTester() {
               )}
             </div>
           </div>
+
+          {/* Encrypted Ecash DVM Column */}
+          <DVMEcashColumn
+            pool={poolRef.current}
+            connected={connected}
+            clientKeys={clientKeysRef.current}
+            relayUrl={ecashRelayUrl}
+          />
+
         </div>
 
       </div>

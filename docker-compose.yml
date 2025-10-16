@@ -1,18 +1,34 @@
 services:
-  strfry:
+  strfry-ecash:
     build:
       context: ./strfry
       dockerfile: Dockerfile
-    container_name: strfry-relay
+    container_name: strfry-ecash-relay
     ports:
       - "7788:7777"
     volumes:
-      # Mount configuration file
+      # Mount configuration file with ecash plugin
       - ./strfry/strfry.conf:/opt/strfry/strfry.conf:ro
       # Persist database
-      - strfry-db:/data/strfry-db
+      - strfry-ecash-db:/data/strfry-db
       # Mount plugins directory (for your custom ecash plugin)
       - ./strfry/plugins:/plugins
+    networks:
+      - ecash-demo
+    restart: unless-stopped
+
+  strfry-plain:
+    build:
+      context: ./strfry
+      dockerfile: Dockerfile
+    container_name: strfry-plain-relay
+    ports:
+      - "7789:7777"
+    volumes:
+      # Mount plain configuration (no plugin)
+      - ./strfry/strfry-plain.conf:/opt/strfry/strfry.conf:ro
+      # Persist database
+      - strfry-plain-db:/data/strfry-db
     networks:
       - ecash-demo
     restart: unless-stopped
@@ -59,7 +75,10 @@ services:
       args:
         - NEXT_PUBLIC_DVM_NPUB=npub13lx4ddje7jflxm6fhrt35gvhcczcm8radxr50vzcj0zu30w95thq3gfast
         - NEXT_PUBLIC_DVM_PUBKEY_HEX=8fcd56b659f493f36f49b8d71a2197c6058d9c7d698747b05893c5c8bdc5a2ee
-        - NEXT_PUBLIC_RELAY_URL=ws://localhost:7788
+        - NEXT_PUBLIC_RELAY_URL=ws://localhost:7789
+        - NEXT_PUBLIC_ECASH_RELAY_URL=ws://localhost:7788
+        - NEXT_PUBLIC_ECASH_DVM_NPUB=npub19k0w48cr0lr3zqeh9jna9nfv8m2u9chgyh6y3rw7l936asvr0dkq8ygmpl
+        - NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX=2d9eea9f037fc71103372ca7d2cd2c3ed5c2e2e825f4488ddef963aec1837b6c
     container_name: ecash-webapp
     ports:
       - "3011:3000"
@@ -67,7 +86,10 @@ services:
       - MINT_URL=http://cdk-mint:8096
       - NEXT_PUBLIC_DVM_NPUB=npub13lx4ddje7jflxm6fhrt35gvhcczcm8radxr50vzcj0zu30w95thq3gfast
       - NEXT_PUBLIC_DVM_PUBKEY_HEX=8fcd56b659f493f36f49b8d71a2197c6058d9c7d698747b05893c5c8bdc5a2ee
-      - NEXT_PUBLIC_RELAY_URL=ws://localhost:7788
+      - NEXT_PUBLIC_RELAY_URL=ws://localhost:7789
+      - NEXT_PUBLIC_ECASH_RELAY_URL=ws://localhost:7788
+      - NEXT_PUBLIC_ECASH_DVM_NPUB=npub19k0w48cr0lr3zqeh9jna9nfv8m2u9chgyh6y3rw7l936asvr0dkq8ygmpl
+      - NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX=2d9eea9f037fc71103372ca7d2cd2c3ed5c2e2e825f4488ddef963aec1837b6c
     volumes:
       - dvm-data:/dvm-data:ro
     depends_on:
@@ -83,11 +105,11 @@ services:
       dockerfile: Dockerfile
     container_name: dvm-echo
     environment:
-      - RELAY_URL=ws://strfry:7777
+      - RELAY_URL=ws://strfry-plain:7777
     volumes:
       - dvm-data:/data
     depends_on:
-      - strfry
+      - strfry-plain
     networks:
       - ecash-demo
     restart: unless-stopped
@@ -98,11 +120,29 @@ services:
       dockerfile: Dockerfile
     container_name: dvm-encrypted
     environment:
-      - RELAY_URL=ws://strfry:7777
+      - RELAY_URL=ws://strfry-plain:7777
     volumes:
       - dvm-encrypted-data:/data
     depends_on:
-      - strfry
+      - strfry-plain
+    networks:
+      - ecash-demo
+    restart: unless-stopped
+
+  dvm-encrypted-ecash:
+    build:
+      context: ./encrypted_ecash_dvm
+      dockerfile: Dockerfile
+    container_name: dvm-encrypted-ecash
+    environment:
+      - RELAY_URL=ws://strfry-ecash:7777
+      - MINT_URL=http://cdk-mint:8096
+      - REQUIRED_SATS=1
+    volumes:
+      - dvm-encrypted-ecash-data:/data
+    depends_on:
+      - strfry-ecash
+      - cdk-mint
     networks:
       - ecash-demo
     restart: unless-stopped
@@ -112,8 +152,10 @@ networks:
     driver: bridge
 
 volumes:
-  strfry-db:
+  strfry-ecash-db:
+  strfry-plain-db:
   mint-data:
   postgres-data:
   dvm-data:
   dvm-encrypted-data:
+  dvm-encrypted-ecash-data:
