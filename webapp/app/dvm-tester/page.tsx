@@ -39,6 +39,7 @@ interface JobRequest {
   status?: string
   isEncrypted?: boolean
   matchedRequestId?: string
+  isPerfTest?: boolean
 }
 
 export default function DVMTester() {
@@ -384,33 +385,18 @@ export default function DVMTester() {
       const responseTime = Date.now()
 
       console.log('Response references request ID:', requestId)
-      console.log('Current tracked request ID:', encryptedLastRequestRef.current?.id || encryptedLastRequest?.id)
 
       // Extract status
       const statusTag = decrypted.message.tags?.find(tag => tag[0] === 'status')
       const status = statusTag?.[1] || 'unknown'
 
-      // Update manual request - match by the unsigned event ID
-      const currentRequest = encryptedLastRequestRef.current || encryptedLastRequest
-      if (currentRequest && requestId && currentRequest.id === requestId) {
-        console.log('✅ Request ID match confirmed! Updating UI...')
-        const updatedRequest = {
-          ...currentRequest,
-          responseReceived: true,
-          responseTime: responseTime - currentRequest.timestamp,
-          responseContent: decrypted.message.content,
-          status,
-          isEncrypted: true,
-          matchedRequestId: requestId  // Store the matched ID for display
-        }
-        encryptedLastRequestRef.current = updatedRequest
-        setEncryptedLastRequest(updatedRequest)
-      } else {
-        console.log('❌ Request ID mismatch or missing - response not matched to a request')
-      }
+      // Check if this is a performance test response
+      const isPerfTestResponse = requestId && encryptedPerfRequestsRef.current.some(req => req.id === requestId)
 
-      // Update performance test requests
-      if (requestId) {
+      if (isPerfTestResponse) {
+        // Update performance test request
+        console.log('✅ Performance test response matched to request:', requestId.substring(0, 16) + '...')
+
         const refRequest = encryptedPerfRequestsRef.current.find(req => req.id === requestId)
         if (refRequest && !refRequest.responseReceived) {
           refRequest.responseReceived = true
@@ -431,6 +417,29 @@ export default function DVMTester() {
               }
             : req
         ))
+      } else {
+        // Check manual request
+        console.log('Current tracked manual request ID:', encryptedLastRequestRef.current?.id || encryptedLastRequest?.id)
+
+        const currentRequest = encryptedLastRequestRef.current || encryptedLastRequest
+        if (currentRequest && requestId && currentRequest.id === requestId) {
+          console.log('✅ Manual test response matched! Updating UI...')
+          const updatedRequest = {
+            ...currentRequest,
+            responseReceived: true,
+            responseTime: responseTime - currentRequest.timestamp,
+            responseContent: decrypted.message.content,
+            status,
+            isEncrypted: true,
+            matchedRequestId: requestId  // Store the matched ID for display
+          }
+          encryptedLastRequestRef.current = updatedRequest
+          setEncryptedLastRequest(updatedRequest)
+        } else if (requestId) {
+          console.log('⚠️ Response with ID', requestId.substring(0, 16) + '...', 'not matched to any tracked request')
+        } else {
+          console.log('❌ Response missing request ID')
+        }
       }
 
     } catch (error) {
@@ -581,7 +590,8 @@ export default function DVMTester() {
             input,
             timestamp: Date.now(),
             responseReceived: false,
-            isEncrypted: false
+            isEncrypted: false,
+            isPerfTest: true
           }
 
           if (i === 0) {
@@ -647,7 +657,8 @@ export default function DVMTester() {
             input,
             timestamp: Date.now(),
             responseReceived: false,
-            isEncrypted: true
+            isEncrypted: true,
+            isPerfTest: true
           }
 
           if (i === 0) {
