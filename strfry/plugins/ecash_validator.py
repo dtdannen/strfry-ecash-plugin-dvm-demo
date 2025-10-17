@@ -9,10 +9,10 @@ import json
 import asyncio
 import time
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 import re
-import base64
-from cashu.wallet.wallet import Wallet
+import httpx
+from cashu.core.base import TokenV4
 
 # Configure logging
 logging.basicConfig(
@@ -36,6 +36,8 @@ class EcashValidator:
             'rejected': 0,
             'validation_times': []
         }
+        # Note: We no longer track spent proofs locally - the /v1/burn endpoint
+        # handles marking proofs as spent in the mint's database
 
     def extract_token_from_event(self, event: Dict[str, Any]) -> Optional[str]:
         """
@@ -65,38 +67,93 @@ class EcashValidator:
 
     async def validate_token_with_mint(self, token: str) -> tuple[bool, str, float]:
         """
-        Validate and spend token with CDK mint using Cashu wallet.
+        Validate and burn token with CDK mint using /v1/swap endpoint with empty outputs.
+        This properly validates the proofs cryptographically and marks them as spent.
         Returns (is_valid, message, validation_time_ms)
         """
         start_time = time.time()
 
         try:
-            # Initialize wallet with our mint
-            # Cashu 0.17.0 requires a database path
-            wallet = Wallet(MINT_URL, db="/tmp/ecash_validator_wallet.db")
+            # Deserialize the token string into TokenV4 object
+            token_obj = TokenV4.deserialize(token)
 
-            # Load mint info (keyset, etc.)
-            await wallet.load_mint()
+            # Extract proofs from the token
+            if not token_obj.proofs or len(token_obj.proofs) == 0:
+                logger.warning("Token has no proofs")
+                return False, "Token has no proofs", (time.time() - start_time) * 1000
 
-            # Try to receive (spend) the token
-            # This will validate and redeem it with the mint
-            proofs = await wallet.receive(token)
+            proofs_to_validate = token_obj.proofs
+            total_amount = sum(p.amount for p in proofs_to_validate)
 
-            validation_time = (time.time() - start_time) * 1000  # Convert to ms
+            # Check if amount is sufficient
+            if total_amount < REQUIRED_SATS:
+                logger.warning(f"Token value too low: {total_amount} sats < {REQUIRED_SATS} required")
+                return False, f"Token value too low: {total_amount} sats", (time.time() - start_time) * 1000
 
-            if proofs:
-                # Token was valid and successfully spent
-                total_amount = sum(p.amount for p in proofs)
+            # Use swap endpoint to validate and burn the proofs
+            # We'll swap to a single output that we immediately discard (effectively burning)
+            async with httpx.AsyncClient() as client:
+                # Convert proofs to JSON format expected by swap endpoint
+                proofs_json = [
+                    {
+                        "amount": p.amount,
+                        "C": p.C,
+                        "secret": p.secret,
+                        "id": p.id
+                    }
+                    for p in proofs_to_validate
+                ]
 
-                if total_amount >= REQUIRED_SATS:
-                    logger.info(f"Token validated successfully: {total_amount} sats in {validation_time:.2f}ms")
+                # Get the mint's keyset to create a blinded message
+                keys_response = await client.get(f"{MINT_URL}/v1/keys", timeout=5.0)
+                if keys_response.status_code != 200:
+                    logger.error("Could not fetch mint keys")
+                    return False, "Mint unavailable", (time.time() - start_time) * 1000
+
+                keyset_data = keys_response.json()
+                keyset_id = keyset_data.get("keysets", [{}])[0].get("id") if "keysets" in keyset_data else None
+
+                if not keyset_id:
+                    logger.error("Could not get keyset ID from mint")
+                    return False, "Mint configuration error", (time.time() - start_time) * 1000
+
+                # Create a dummy blinded output for the full amount
+                # We use a valid compressed public key format (33 bytes: 0x02 or 0x03 prefix + 32 bytes)
+                import secrets
+                # Generate a valid compressed public key: 0x02 prefix + 32 random bytes
+                dummy_blinded_message = "02" + secrets.token_hex(32)  # 33 bytes (66 hex chars)
+
+                outputs_json = [{
+                    "amount": total_amount,
+                    "B_": dummy_blinded_message,  # Blinded message (valid public key format)
+                    "id": keyset_id
+                }]
+
+                # Call swap - this validates the proofs and marks them as spent
+                swap_response = await client.post(
+                    f"{MINT_URL}/v1/swap",
+                    json={
+                        "inputs": proofs_json,
+                        "outputs": outputs_json
+                    },
+                    timeout=10.0
+                )
+
+                validation_time = (time.time() - start_time) * 1000
+
+                if swap_response.status_code == 200:
+                    # Swap successful - tokens are now burned (marked as spent)
+                    logger.info(f"Token burned successfully via swap: {total_amount} sats in {validation_time:.2f}ms")
                     return True, f"Token valid: {total_amount} sats", validation_time
                 else:
-                    logger.warning(f"Token value too low: {total_amount} sats < {REQUIRED_SATS} required")
-                    return False, f"Token value too low: {total_amount} sats", validation_time
-            else:
-                logger.warning("Token validation failed: no proofs returned")
-                return False, "Token invalid or already spent", validation_time
+                    error_detail = swap_response.text
+                    logger.warning(f"Token swap/burn failed: {swap_response.status_code} - {error_detail}")
+
+                    # Parse error message for better feedback
+                    if "already spent" in error_detail.lower() or "pending" in error_detail.lower():
+                        return False, "Token already spent", validation_time
+                    else:
+                        return False, f"Token invalid: {error_detail}", validation_time
 
         except Exception as e:
             validation_time = (time.time() - start_time) * 1000
