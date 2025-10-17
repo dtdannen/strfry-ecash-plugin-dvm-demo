@@ -92,6 +92,13 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   const perfRequestsRef = useRef<JobRequest[]>([])
   const [perfBatchMinting, setPerfBatchMinting] = useState(false)
 
+  // Performance test token management
+  const [perfTokens, setPerfTokens] = useState<Array<{ relay: string; dvm: string }>>([])
+  const [perfMintProgress, setPerfMintProgress] = useState(0)
+  const [perfMinting, setPerfMinting] = useState(false)
+  const [perfSendProgress, setPerfSendProgress] = useState(0)
+  const [perfReceiveProgress, setPerfReceiveProgress] = useState(0)
+
   // Token wallet state
   const [tokenWallet, setTokenWallet] = useState<Array<{ token: string; amount: number; id: string }>>([])
   const [mintingBatch, setMintingBatch] = useState(false)
@@ -303,120 +310,144 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
     }
   }
 
+  // Handle minting tokens for performance test
+  const handleMintPerfTokens = async () => {
+    if (perfMinting) return
+
+    setPerfMinting(true)
+    setPerfMintProgress(0)
+    setPerfTokens([])
+
+    console.log(`Minting ${perfRequestCount * 2} tokens (${perfRequestCount} pairs)...`)
+    const tokenPairs: Array<{ relay: string; dvm: string }> = []
+
+    try {
+      // Simple loop like homepage - no batching
+      for (let i = 0; i < perfRequestCount; i++) {
+        // Mint 2 tokens per request (relay + DVM)
+        const relayToken = await mintToken(1)
+        const dvmToken = await mintToken(1)
+
+        if (relayToken && dvmToken) {
+          tokenPairs.push({ relay: relayToken.token, dvm: dvmToken.token })
+          setPerfMintProgress(i + 1)
+        }
+      }
+
+      setPerfTokens(tokenPairs)
+      console.log(`Successfully minted ${tokenPairs.length} token pairs (${tokenPairs.length * 2} total tokens)`)
+
+    } catch (error) {
+      console.error('Error minting performance test tokens:', error)
+    } finally {
+      setPerfMinting(false)
+    }
+  }
+
   // Handle performance test
   const handlePerformanceTest = async () => {
-    if (!pool || !connected || perfRunning || !clientKeys) {
+    if (!pool || !connected || perfRunning || !clientKeys || perfTokens.length === 0) {
       return
     }
 
     setPerfRunning(true)
     setPerfProgress(0)
+    setPerfSendProgress(0)
+    setPerfReceiveProgress(0)
     setPerfRequests([])
     perfRequestsRef.current = []
-    setPerfBatchMinting(true)
 
     const startTime = Date.now()
-    const BATCH_SIZE = 100 // Process in batches to avoid overwhelming
+    const timerInterval = setInterval(() => {
+      setPerfElapsedTime((Date.now() - startTime) / 1000)
+    }, 100)
 
     try {
-      // Pre-mint all tokens for performance test
-      console.log(`Pre-minting ${perfRequestCount} tokens...`)
-      const tokens: { token: string; amount: number }[] = []
+      console.log(`Sending ${perfTokens.length} requests using pre-minted tokens...`)
 
-      // Mint tokens in batches
-      const mintBatches = Math.ceil(perfRequestCount / BATCH_SIZE)
-      for (let batch = 0; batch < mintBatches; batch++) {
-        const batchStart = batch * BATCH_SIZE
-        const batchEnd = Math.min((batch + 1) * BATCH_SIZE, perfRequestCount)
-        const batchPromises = []
+      // Simple loop like encrypted DVM test - no batching
+      for (let i = 0; i < perfTokens.length; i++) {
+        const input = `Perf test ${i + 1}/${perfTokens.length}`
+        const tokenPair = perfTokens[i]
 
-        for (let i = batchStart; i < batchEnd; i++) {
-          batchPromises.push(mintToken(1))
+        const unsignedEvent = {
+          kind: 25000,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [
+            ['i', input],
+            ['ecash', tokenPair.dvm]
+          ],
+          content: `Performance test: ${input}`,
+          pubkey: clientKeys.publicKey
         }
 
-        const batchResults = await Promise.all(batchPromises)
-        tokens.push(...batchResults.filter((t): t is { token: string; amount: number } => t !== null))
-        setPerfProgress((tokens.length / perfRequestCount) * 0.5) // First 50% is minting
+        const signedEvent = finalizeEvent(unsignedEvent, clientKeys.secretKey)
+
+        // Encrypt the request
+        const secretKeyHex = Array.from(clientKeys.secretKey)
+          .map(byte => byte.toString(16).padStart(2, '0'))
+          .join('')
+
+        const { giftWrap } = await encryptNip17Message(
+          secretKeyHex,
+          dvmConfig.pubkeyHex,
+          signedEvent.content,
+          signedEvent.tags, // include the 'i' and 'ecash' tags
+          25000, // kind
+          [['ecash', tokenPair.relay]] // gift wrap tags with relay token
+        )
+
+        await pool.publish([relayUrl], giftWrap)
+
+        const newRequest: JobRequest = {
+          id: signedEvent.id,
+          input,
+          timestamp: Date.now(),
+          responseReceived: false,
+          isEncrypted: true,
+          isPerfTest: true,
+          token: `Relay: 1 sat, DVM: 1 sat`,
+          tokenAmount: 2
+        }
+
+        perfRequestsRef.current.push(newRequest)
+        setPerfRequests(prev => [...prev, newRequest])
+        setPerfProgress(i + 1)
+        setPerfSendProgress(i + 1)
+
+        // Small delay like encrypted DVM test
+        await new Promise(resolve => setTimeout(resolve, 10))
       }
 
-      setPerfBatchMinting(false)
-      console.log(`Minted ${tokens.length} tokens, sending requests...`)
+      console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
 
-      // Send all requests in batches
-      const requests: JobRequest[] = []
-      const sendBatches = Math.ceil(tokens.length / BATCH_SIZE)
-
-      for (let batch = 0; batch < sendBatches; batch++) {
-        const batchStart = batch * BATCH_SIZE
-        const batchEnd = Math.min((batch + 1) * BATCH_SIZE, tokens.length)
-        const batchPromises = []
-
-        for (let i = batchStart; i < batchEnd; i++) {
-          const input = `Perf test ${i + 1}/${perfRequestCount}`
-
-          const unsignedEvent = {
-            kind: 25000,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [
-              ['i', input],
-              ['ecash', tokens[i].token]
-            ],
-            content: `Performance test: ${input}`,
-            pubkey: clientKeys.publicKey
-          }
-
-          const signedEvent = finalizeEvent(unsignedEvent, clientKeys.secretKey)
-
-          // Encrypt the request
-          // Convert secretKey Uint8Array to hex string
-          const secretKeyHex = Array.from(clientKeys.secretKey)
-            .map(byte => byte.toString(16).padStart(2, '0'))
-            .join('')
-
-          const encryptPromise = encryptNip17Message(
-            secretKeyHex,
-            dvmConfig.pubkeyHex,
-            JSON.stringify(signedEvent)
-          ).then(({ giftWrap }) => {
-            return Promise.all(pool.publish([relayUrl], giftWrap)).then(() => {
-              const newRequest: JobRequest = {
-                id: signedEvent.id,
-                input,
-                timestamp: Date.now(),
-                responseReceived: false,
-                isEncrypted: true,
-                isPerfTest: true,
-                token: tokens[i].token,
-                tokenAmount: tokens[i].amount
-              }
-              return newRequest
-            })
-          })
-
-          batchPromises.push(encryptPromise)
-        }
-
-        const batchRequests = await Promise.all(batchPromises)
-        requests.push(...batchRequests)
-        setPerfProgress(0.5 + ((requests.length / tokens.length) * 0.5)) // Second 50% is sending
-
-        // Small delay between batches to avoid overwhelming
-        if (batch < sendBatches - 1) {
-          await new Promise(resolve => setTimeout(resolve, 100))
-        }
-      }
-
-      setPerfRequests(requests)
-      perfRequestsRef.current = requests
-      setPerfElapsedTime((Date.now() - startTime) / 1000)
-
-      console.log(`Sent ${requests.length} encrypted ecash requests`)
+      // Clear used tokens
+      setPerfTokens([])
 
     } catch (error) {
       console.error('Performance test error:', error)
-      setPerfBatchMinting(false)
     } finally {
       setPerfRunning(false)
+
+      const stopTimer = () => {
+        setPerfElapsedTime((Date.now() - startTime) / 1000)
+        clearInterval(timerInterval)
+      }
+
+      // Check for completion like encrypted DVM test
+      const checkComplete = setInterval(() => {
+        const totalReceived = perfRequestsRef.current.filter(r => r.responseReceived).length
+        if (totalReceived === perfRequestsRef.current.length) {
+          clearInterval(checkComplete)
+          stopTimer()
+        }
+      }, 100)
+
+      // Timeout after 60 seconds
+      setTimeout(() => {
+        clearInterval(checkComplete)
+        stopTimer()
+      }, 60000)
     }
   }
 
@@ -508,27 +539,25 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
                 if (perfRequestsRef.current.length > 0) {
                   const requestId = decrypted.tags.find((t: string[]) => t[0] === 'e')?.[1]
 
-                  const updatedRequests = perfRequestsRef.current.map(req => {
-                    if (req.id === requestId && !req.responseReceived) {
-                      return {
-                        ...req,
-                        responseReceived: true,
-                        responseTime: Date.now() - req.timestamp,
-                        responseContent: decrypted.content,
-                        status: decrypted.tags.find((t: string[]) => t[0] === 'status')?.[1]
-                      }
-                    }
-                    return req
-                  })
-
-                  perfRequestsRef.current = updatedRequests
-                  setPerfRequests(updatedRequests)
-
-                  const completed = updatedRequests.filter(r => r.responseReceived).length
-                  if (completed === updatedRequests.length) {
-                    const totalTime = Math.max(...updatedRequests.map(r => r.responseTime || 0))
-                    setPerfElapsedTime(totalTime / 1000)
+                  const refRequest = perfRequestsRef.current.find(req => req.id === requestId)
+                  if (refRequest && !refRequest.responseReceived) {
+                    refRequest.responseReceived = true
+                    refRequest.responseTime = Date.now() - refRequest.timestamp
+                    refRequest.responseContent = decrypted.content
+                    refRequest.status = decrypted.tags.find((t: string[]) => t[0] === 'status')?.[1]
                   }
+
+                  setPerfRequests(prev => prev.map(req =>
+                    req.id === requestId
+                      ? {
+                          ...req,
+                          responseReceived: true,
+                          responseTime: Date.now() - req.timestamp,
+                          responseContent: decrypted.content,
+                          status: decrypted.tags.find((t: string[]) => t[0] === 'status')?.[1]
+                        }
+                      : req
+                  ))
                 }
               }
             } catch (e) {
@@ -714,85 +743,143 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
             </label>
             <select
               value={perfRequestCount}
-              onChange={(e) => setPerfRequestCount(parseInt(e.target.value))}
-              disabled={perfRunning}
+              onChange={(e) => {
+                setPerfRequestCount(parseInt(e.target.value))
+                setPerfTokens([]) // Clear tokens when count changes
+              }}
+              disabled={perfRunning || perfMinting}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg"
             >
-              <option value="10">10 tokens</option>
-              <option value="100">100 tokens</option>
-              <option value="1000">1,000 tokens</option>
-              <option value="10000">10,000 tokens</option>
+              <option value="10">10 requests</option>
+              <option value="100">100 requests</option>
+              <option value="1000">1,000 requests</option>
             </select>
             <p className="text-xs text-gray-500 mt-1">
-              Total cost: {perfRequestCount.toLocaleString()} sats
+              Total cost: {(perfRequestCount * 2).toLocaleString()} sats ({perfRequestCount} relay + {perfRequestCount} DVM)
             </p>
           </div>
 
-          <button
-            onClick={handlePerformanceTest}
-            disabled={perfRunning || !connected}
-            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
-          >
-            {perfRunning ? (
-              perfBatchMinting
-                ? `Minting tokens... (${Math.floor(perfProgress * 100)}%)`
-                : `Sending requests... (${Math.floor(perfProgress * 100)}%)`
-            ) : `Run Performance Test (${perfRequestCount.toLocaleString()} sats)`}
-          </button>
-
-          {perfRequests.length > 0 && (
-            <div className="mt-4 p-4 bg-gray-50 rounded-lg">
-              <h4 className="font-semibold mb-2">Performance Results</h4>
-              <div className="grid grid-cols-2 gap-2 text-sm">
+          {/* Token Status Display */}
+          {perfTokens.length > 0 && (
+            <div className="p-3 bg-green-50 rounded-lg border border-green-200">
+              <div className="flex justify-between items-center">
                 <div>
-                  <span className="text-gray-600">Total Requests:</span>
-                  <span className="ml-2 font-mono">{perfRequests.length}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Responses:</span>
-                  <span className="ml-2 font-mono">
-                    {perfRequests.filter(r => r.responseReceived).length}/{perfRequests.length}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Total Cost:</span>
-                  <span className="ml-2 font-mono">{perfRequests.length} sats</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Elapsed:</span>
-                  <span className="ml-2 font-mono">{perfElapsedTime.toFixed(2)}s</span>
-                </div>
-                {perfRequests.filter(r => r.responseReceived).length > 0 && (
-                  <>
-                    <div>
-                      <span className="text-gray-600">Avg Response:</span>
-                      <span className="ml-2 font-mono">
-                        {(perfRequests.filter(r => r.responseReceived).reduce((sum, r) => sum + (r.responseTime || 0), 0) / perfRequests.filter(r => r.responseReceived).length).toFixed(0)}ms
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">Success Rate:</span>
-                      <span className="ml-2 font-mono">
-                        {((perfRequests.filter(r => r.responseReceived).length / perfRequests.length) * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {perfProgress > 0 && perfProgress < 1 && (
-                <div className="mt-4">
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-purple-600 h-2 rounded-full transition-all"
-                      style={{ width: `${perfProgress * 100}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {perfProgress < 0.5 ? 'Minting tokens...' : 'Sending requests...'}
+                  <p className="text-sm font-semibold text-green-700">
+                    ✓ {perfTokens.length} token pairs ready ({perfTokens.length * 2} total tokens)
+                  </p>
+                  <p className="text-xs text-green-600 mt-1">
+                    Ready to send {perfTokens.length} encrypted requests
                   </p>
                 </div>
-              )}
+                <button
+                  onClick={() => setPerfTokens([])}
+                  disabled={perfRunning}
+                  className="text-xs px-3 py-1 bg-red-500 hover:bg-red-600 disabled:bg-gray-400 text-white rounded transition"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Mint Tokens Button */}
+          <button
+            onClick={handleMintPerfTokens}
+            disabled={perfMinting || perfRunning || perfTokens.length > 0}
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
+          >
+            {perfMinting
+              ? `Minting tokens... (${Math.floor(perfMintProgress * 100)}%)`
+              : perfTokens.length > 0
+                ? 'Tokens Ready'
+                : `Mint ${perfRequestCount * 2} Tokens (${perfRequestCount * 2} sats)`
+            }
+          </button>
+
+          {/* Minting Progress Bar */}
+          {perfMinting && (
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs">
+                <span>Minting Token Pairs</span>
+                <span>{perfMintProgress}/{perfRequestCount}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className="bg-blue-600 h-3 rounded-full transition-all"
+                  style={{ width: `${(perfMintProgress / perfRequestCount) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Run Performance Test Button */}
+          <button
+            onClick={handlePerformanceTest}
+            disabled={perfRunning || !connected || perfTokens.length === 0 || perfMinting}
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
+          >
+            {perfRunning
+              ? `Running test... (${Math.floor(perfProgress * 100)}%)`
+              : perfTokens.length === 0
+                ? 'Mint Tokens First'
+                : `Run Performance Test (${perfRequestCount.toLocaleString()} requests)`
+            }
+          </button>
+
+          {/* Send/Receive Progress Bars */}
+          {perfProgress > 0 && (
+            <div className="space-y-3">
+              <div className="text-center text-sm text-gray-600">
+                Time: {perfElapsedTime.toFixed(1)}s
+              </div>
+
+              {/* Send Progress */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span>Encrypting & Sending</span>
+                  <span>{perfSendProgress}/{perfRequestCount}</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all"
+                    style={{ width: `${(perfSendProgress / perfRequestCount) * 100}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Receive Progress */}
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs">
+                  <span>Decrypting & Receiving</span>
+                  <span>{perfRequests.filter(r => r.responseReceived).length}/{perfRequestCount}</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-green-600 h-2 rounded-full transition-all"
+                    style={{ width: `${(perfRequests.filter(r => r.responseReceived).length / perfRequestCount) * 100}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Performance Results */}
+          {perfProgress > 0 && (
+            <div className="grid grid-cols-2 gap-2 text-sm bg-gray-50 p-3 rounded">
+              <div>
+                <p className="text-gray-600">Success Rate</p>
+                <p className="font-semibold">
+                  {perfProgress > 0 ? ((perfRequests.filter(r => r.responseReceived).length / perfProgress) * 100).toFixed(1) : 0}%
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-600">Avg Time</p>
+                <p className="font-semibold">
+                  {perfRequests.filter(r => r.responseReceived).length > 0
+                    ? (perfRequests.filter(r => r.responseReceived).reduce((sum, r) => sum + (r.responseTime || 0), 0) / perfRequests.filter(r => r.responseReceived).length).toFixed(0)
+                    : 0} ms
+                </p>
+              </div>
             </div>
           )}
         </div>
