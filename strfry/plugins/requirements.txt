@@ -1,2 +1,3 @@
 cashu>=0.17.0
 marshmallow<4.0.0,>=3.13.0
+httpx>=0.24.0

@@ -14,7 +14,7 @@ import {
   encryptNip17Message,
   decryptNip17GiftWrap
 } from '../../lib/nip17'
-import { CashuMint, CashuWallet, getEncodedToken } from '@cashu/cashu-ts'
+import { CashuMint, CashuWallet, getEncodedTokenV4, MintQuoteState } from '@cashu/cashu-ts'
 
 interface DVMEcashConfig {
   npub: string
@@ -60,10 +60,17 @@ interface DVMEcashColumnProps {
 }
 
 export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEcashColumnProps) {
-  // DVM configuration - will be updated once DVM starts
+  // DVM configuration - use environment variables
+  const ecashDvmNpub = process.env.NEXT_PUBLIC_ECASH_DVM_NPUB || 'pending...'
+  const ecashDvmPubkeyHex = process.env.NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX || ''
+
+  console.log('Encrypted Ecash DVM Config from env:')
+  console.log('  NPUB:', ecashDvmNpub)
+  console.log('  Pubkey Hex:', ecashDvmPubkeyHex)
+
   const [dvmConfig, setDvmConfig] = useState<DVMEcashConfig>({
-    npub: 'pending...',
-    pubkeyHex: '',
+    npub: ecashDvmNpub,
+    pubkeyHex: ecashDvmPubkeyHex,
     relayUrl: relayUrl,
     label: 'Encrypted Ecash DVM',
     mintUrl: 'http://localhost:8096'
@@ -85,38 +92,122 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   const perfRequestsRef = useRef<JobRequest[]>([])
   const [perfBatchMinting, setPerfBatchMinting] = useState(false)
 
+  // Token wallet state
+  const [tokenWallet, setTokenWallet] = useState<Array<{ token: string; amount: number; id: string }>>([])
+  const [mintingBatch, setMintingBatch] = useState(false)
+  const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null)
+
   // Token minting state
   const [mintingToken, setMintingToken] = useState(false)
+
+  // Manual test token state
+  const [relayToken, setRelayToken] = useState('')
+  const [dvmToken, setDvmToken] = useState('')
 
   // Mint functions
   const mintToken = async (amount: number = 1): Promise<{ token: string; amount: number } | null> => {
     try {
+      console.log('🪙 Starting token mint process...')
+      console.log('   Mint URL:', dvmConfig.mintUrl)
+      console.log('   Amount:', amount)
+
       const mint = new CashuMint(dvmConfig.mintUrl)
       const wallet = new CashuWallet(mint)
       await wallet.loadMint()
+      console.log('✅ Mint loaded')
 
       // Create a mint quote
+      console.log('📝 Creating mint quote...')
       const mintQuote = await wallet.createMintQuote(amount)
+      console.log('📋 Mint quote created:', mintQuote)
+      console.log('   Quote ID:', mintQuote.quote)
+      console.log('   Full mintQuote object keys:', Object.keys(mintQuote))
 
-      // Check payment (fake wallet auto-pays)
-      await wallet.checkMintQuote(mintQuote.quote)
+      // Poll for payment (fake wallet auto-pays)
+      console.log('⏳ Polling for payment...')
+      let mintQuoteChecked
+      let attempts = 0
+      const maxAttempts = 30
+
+      while (attempts < maxAttempts) {
+        mintQuoteChecked = await wallet.checkMintQuote(mintQuote.quote)
+        console.log(`   Attempt ${attempts + 1}:`, mintQuoteChecked)
+
+        if (mintQuoteChecked.state === MintQuoteState.PAID) {
+          console.log('✅ Payment confirmed!')
+          break
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 100))
+        attempts++
+      }
+
+      if (!mintQuoteChecked || mintQuoteChecked.state !== MintQuoteState.PAID) {
+        console.error('❌ Mint quote not paid in time')
+        console.error('   Final state:', mintQuoteChecked?.state)
+        console.error('   Attempts:', attempts)
+        throw new Error('Mint quote not paid in time')
+      }
 
       // Mint the token
+      console.log('🔨 Minting proofs...')
       const proofs = await wallet.mintProofs(amount, mintQuote.quote)
+      console.log('✅ Proofs minted:', proofs.length, 'proofs')
 
       // Create encoded token
-      const token = getEncodedToken({
-        token: [{
-          mint: dvmConfig.mintUrl,
-          proofs
-        }]
+      console.log('📦 Encoding token...')
+      const token = getEncodedTokenV4({
+        mint: dvmConfig.mintUrl,
+        proofs: proofs
       })
+      console.log('✅ Token created successfully')
 
       return { token, amount }
     } catch (error) {
-      console.error('Error minting token:', error)
+      console.error('❌ Error minting token:', error)
+      if (error instanceof Error) {
+        console.error('   Error message:', error.message)
+        console.error('   Error stack:', error.stack)
+      }
       return null
     }
+  }
+
+  // Handle batch minting for wallet
+  const handleMintTokens = async () => {
+    setMintingBatch(true)
+    try {
+      const tokens: Array<{ token: string; amount: number; id: string }> = []
+      for (let i = 0; i < 2; i++) {
+        const tokenData = await mintToken(1)
+        if (tokenData) {
+          tokens.push({
+            token: tokenData.token,
+            amount: tokenData.amount,
+            id: Math.random().toString(36).substr(2, 9)
+          })
+        }
+      }
+
+      // Populate relay and DVM token fields with the newly minted tokens
+      if (tokens.length >= 2) {
+        setRelayToken(tokens[0].token)
+        setDvmToken(tokens[1].token)
+      }
+
+      setTokenWallet(prev => [...prev, ...tokens])
+    } catch (error) {
+      console.error('Error minting tokens:', error)
+    } finally {
+      setMintingBatch(false)
+    }
+  }
+
+  // Copy token to clipboard
+  const copyToken = (tokenId: string, token: string) => {
+    navigator.clipboard.writeText(token)
+    setCopiedTokenId(tokenId)
+    setTimeout(() => setCopiedTokenId(null), 2000)
   }
 
   // Handle manual test
@@ -125,27 +216,35 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
       return
     }
 
+    // Check if we have both tokens populated
+    if (!relayToken || !dvmToken) {
+      console.error('Both relay and DVM tokens required. Please mint tokens first.')
+      return
+    }
+
     setManualLoading(true)
 
     try {
-      // First, mint a token
-      setMintingToken(true)
-      const tokenData = await mintToken(1)
-      setMintingToken(false)
+      // Use the relay token and DVM token
+      const relayTokenToUse = relayToken
+      const dvmTokenToUse = dvmToken
 
-      if (!tokenData) {
-        throw new Error('Failed to mint token')
-      }
+      // Clear the token fields after use
+      setRelayToken('')
+      setDvmToken('')
+
+      // Remove the first 2 tokens from wallet
+      setTokenWallet(prev => prev.slice(2))
 
       const startTime = Date.now()
 
-      // Create the DVM request with ecash token
+      // Create the DVM request with DVM ecash token
       const unsignedEvent = {
         kind: 25000,
         created_at: Math.floor(Date.now() / 1000),
         tags: [
           ['i', testInput],
-          ['ecash', tokenData.token]
+          ['ecash', dvmTokenToUse]
         ],
         content: `Echo request: ${testInput}`,
         pubkey: clientKeys.publicKey
@@ -153,9 +252,12 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
       const signedEvent = finalizeEvent(unsignedEvent, clientKeys.secretKey)
 
-      // For encrypted ecash DVM, we need to get the pubkey from heartbeat
+      // For encrypted ecash DVM, we need the pubkey
       if (!dvmConfig.pubkeyHex) {
-        console.error('DVM public key not yet available from heartbeat')
+        console.error('DVM public key not available!')
+        console.error('  dvmConfig.pubkeyHex:', dvmConfig.pubkeyHex)
+        console.error('  dvmConfig.npub:', dvmConfig.npub)
+        console.error('  Full dvmConfig:', dvmConfig)
         setManualLoading(false)
         return
       }
@@ -169,10 +271,13 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
       const { giftWrap } = await encryptNip17Message(
         secretKeyHex,
         dvmConfig.pubkeyHex,
-        JSON.stringify(signedEvent)
+        signedEvent.content,
+        signedEvent.tags, // include the 'i' and 'ecash' tags
+        25000, // kind
+        [['ecash', relayTokenToUse]] // gift wrap tags with relay token
       )
 
-      // Send the encrypted request
+      // Send the encrypted request with relay token in gift wrap
       await pool.publish([relayUrl], giftWrap)
 
       const newRequest: JobRequest = {
@@ -181,8 +286,8 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         timestamp: Date.now(),
         responseReceived: false,
         isEncrypted: true,
-        token: tokenData.token,
-        tokenAmount: tokenData.amount
+        token: `Relay: 1 sat, DVM: 1 sat`,
+        tokenAmount: 2
       }
 
       setLastRequest(newRequest)
@@ -442,6 +547,54 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
   return (
     <div className="space-y-6">
+      {/* Token Wallet Section */}
+      <div className="bg-white rounded-lg shadow-lg p-6">
+        <h3 className="text-xl font-bold mb-4 text-purple-600">Token Wallet</h3>
+
+        <div className="space-y-2 mb-4">
+          <div className="text-sm text-gray-600">
+            Tokens Available: <span className="font-bold text-purple-600">{tokenWallet.length}</span>
+          </div>
+          <button
+            onClick={handleMintTokens}
+            disabled={mintingBatch}
+            className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
+          >
+            {mintingBatch ? 'Minting...' : 'Mint 2 Tokens (2 sats)'}
+          </button>
+        </div>
+
+        {tokenWallet.length > 0 ? (
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {tokenWallet.map((t, idx) => (
+              <div key={t.id} className="p-3 bg-gray-50 rounded-lg border border-gray-200">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-gray-600">Token #{idx + 1} ({t.amount} sat)</span>
+                  <button
+                    onClick={() => copyToken(t.id, t.token)}
+                    className={`text-xs px-3 py-1 rounded transition ${
+                      copiedTokenId === t.id
+                        ? 'bg-green-500 text-white'
+                        : 'bg-blue-500 hover:bg-blue-600 text-white'
+                    }`}
+                  >
+                    {copiedTokenId === t.id ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+                <div className="text-xs font-mono text-gray-500 break-all">
+                  {t.token.substring(0, 20)}...{t.token.substring(t.token.length - 10)}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300">
+            <p className="font-medium">No tokens in wallet</p>
+            <p className="text-sm mt-1">Click "Mint 2 Tokens" to get started</p>
+          </div>
+        )}
+      </div>
+
       {/* Manual Test Section */}
       <div className="bg-white rounded-lg shadow-lg p-6">
         <h3 className="text-xl font-bold mb-4 text-purple-600">{dvmConfig.label}</h3>
@@ -491,12 +644,40 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
             />
           </div>
 
+          {/* Ecash Token Fields */}
+          <div className="space-y-2">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                Relay Token (1 sat)
+              </label>
+              <input
+                type="text"
+                value={relayToken ? `${relayToken.substring(0, 20)}...${relayToken.substring(relayToken.length - 10)}` : ''}
+                readOnly
+                placeholder="Mint tokens to populate..."
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-xs font-mono text-gray-600"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                DVM Token (1 sat)
+              </label>
+              <input
+                type="text"
+                value={dvmToken ? `${dvmToken.substring(0, 20)}...${dvmToken.substring(dvmToken.length - 10)}` : ''}
+                readOnly
+                placeholder="Mint tokens to populate..."
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg bg-gray-50 text-xs font-mono text-gray-600"
+              />
+            </div>
+          </div>
+
           <button
             onClick={handleManualTest}
-            disabled={manualLoading || !testInput.trim() || !connected || mintingToken}
+            disabled={manualLoading || !testInput.trim() || !connected || !relayToken || !dvmToken}
             className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
           >
-            {mintingToken ? 'Minting Token...' : manualLoading ? 'Sending...' : 'Send Ecash Request (1 sat)'}
+            {manualLoading ? 'Sending...' : (!relayToken || !dvmToken) ? 'Mint Tokens First' : `Send Request (uses 2 tokens)`}
           </button>
 
           {lastRequest && (

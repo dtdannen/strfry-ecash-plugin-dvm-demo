@@ -1,4 +1,5 @@
 .trees/
 webapp/node_modules/
 cdk/
-webapp/.next
+venv/
+webapp/.next/

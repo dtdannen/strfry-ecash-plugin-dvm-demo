@@ -37,7 +37,8 @@ async def encrypt_nip17_message(
     message_content: str,
     message_tags: list = None,
     message_kind: int = 25000,
-    verbose: bool = False
+    verbose: bool = False,
+    gift_wrap_tags: list = None
 ) -> Event:
     """
     Encrypt a message using NIP-17 gift wrap protocol.
@@ -143,7 +144,13 @@ async def encrypt_nip17_message(
 
         gift_wrap_builder = EventBuilder(kind=Kind(1059), content=encrypted_seal)
         gift_wrap_builder = gift_wrap_builder.custom_created_at(random_timestamp)
-        gift_wrap_builder = gift_wrap_builder.tags([Tag.parse(["p", recipient_pubkey.to_hex()])])
+
+        # Build tag list: always include 'p' tag, optionally add custom tags (like ecash)
+        tags_to_add = [Tag.parse(["p", recipient_pubkey.to_hex()])]
+        if gift_wrap_tags:
+            tags_to_add.extend([Tag.parse(tag) if isinstance(tag, list) else tag for tag in gift_wrap_tags])
+
+        gift_wrap_builder = gift_wrap_builder.tags(tags_to_add)
 
         gift_wrap_signer = NostrSigner.keys(random_keys)  # Same keys as encryption
         gift_wrap_event = await gift_wrap_builder.sign(gift_wrap_signer)
@@ -286,6 +293,10 @@ async def decrypt_nip17_gift_wrap(
                         def to_vec(self):
                             return [SimpleTag(tag) for tag in self.tags_data]
 
+                        def __iter__(self):
+                            """Make SimpleTags iterable"""
+                            return iter([SimpleTag(tag) for tag in self.tags_data])
+
                     class SimpleTag:
                         def __init__(self, tag_data):
                             self.tag_data = tag_data
@@ -297,6 +308,16 @@ async def decrypt_nip17_gift_wrap(
 
                 def id(self):
                     return self._event_id
+
+                def kind(self):
+                    """Return the kind as a Kind object"""
+                    from nostr_sdk import Kind
+                    return Kind(self.data.get('kind', 0))
+
+                def author(self):
+                    """Return the author as a PublicKey object"""
+                    from nostr_sdk import PublicKey
+                    return PublicKey.parse(self.data.get('pubkey', ''))
 
             message_event = SimpleEvent(message_data)
 
@@ -331,7 +352,7 @@ class Nip17Crypto:
 
         # Extract message details
         message_content = message_event.content()
-        message_tags = [[t.as_vec()[i] for i in range(len(t.as_vec()))] for t in message_event.tags().to_vec()]
+        message_tags = [[t.as_vec()[i] for i in range(len(t.as_vec()))] for t in message_event.tags()]
         message_kind = message_event.kind().as_u16()
 
         # Encrypt and wrap the message

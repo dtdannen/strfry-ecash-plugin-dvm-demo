@@ -20,7 +20,8 @@ from nostr_sdk import (
     EventId, Alphabet, RelayUrl
 )
 
-from cashu.wallet.wallet import Wallet
+import httpx
+from cashu.core.base import TokenV4
 from nip17_crypto import Nip17Crypto
 
 # Setup logging
@@ -59,7 +60,6 @@ class EncryptedEcashDVM:
         self.client = None
         self.processed_jobs = set()
         self.crypto = None
-        self.wallet = None
         self.stats = {
             'total_requests': 0,
             'valid_payments': 0,
@@ -71,6 +71,7 @@ class EncryptedEcashDVM:
             'unique_users': set()
         }
         self.user_spending = defaultdict(int)  # Track spending per user
+        self.spent_secrets = set()  # Track spent proof secrets to prevent double-spending
 
     async def load_or_create_keys(self) -> Keys:
         """Load existing keys or create new ones"""
@@ -122,25 +123,70 @@ class EncryptedEcashDVM:
         start_time = time.time()
 
         try:
-            # Try to receive (spend) the token
-            proofs = await self.wallet.receive(token)
+            # Deserialize the token string into TokenV4 object
+            token_obj = TokenV4.deserialize(token)
 
-            validation_time = (time.time() - start_time) * 1000
-            self.stats['validation_times'].append(validation_time)
+            # Extract proofs from the token
+            if not token_obj.proofs or len(token_obj.proofs) == 0:
+                logger.warning("Token has no proofs")
+                return False, "Token has no proofs", 0
 
-            if proofs:
-                total_amount = sum(p.amount for p in proofs)
+            proofs_to_validate = token_obj.proofs
+            total_amount = sum(p.amount for p in proofs_to_validate)
 
-                if total_amount >= REQUIRED_SATS:
-                    logger.info(f"Valid payment: {total_amount} sats (validation: {validation_time:.2f}ms)")
-                    self.stats['total_sats_earned'] += total_amount
-                    return True, f"Payment accepted: {total_amount} sats", total_amount
+            # Check if amount is sufficient
+            if total_amount < REQUIRED_SATS:
+                logger.warning(f"Insufficient payment: {total_amount} sats < {REQUIRED_SATS} required")
+                return False, f"Insufficient payment: {total_amount} sats", 0
+
+            # First check if we've already seen these proof secrets (local double-spend check)
+            proof_secrets = [p.secret for p in proofs_to_validate]
+            already_spent = [s for s in proof_secrets if s in self.spent_secrets]
+            if already_spent:
+                logger.warning(f"Token contains already spent proofs: {len(already_spent)} proofs")
+                return False, "Token already spent", 0
+
+            # Use the checkstate endpoint to validate the token with the mint (NUT-07)
+            async with httpx.AsyncClient() as client:
+                # Get the Y values (public keys) from the proofs
+                proof_ys = [p.C for p in proofs_to_validate]
+
+                # Check the state of the proofs with the mint
+                checkstate_response = await client.post(
+                    f"{MINT_URL}/v1/checkstate",
+                    json={
+                        "Ys": proof_ys
+                    },
+                    timeout=10.0
+                )
+
+                validation_time = (time.time() - start_time) * 1000
+                self.stats['validation_times'].append(validation_time)
+
+                if checkstate_response.status_code == 200:
+                    result = checkstate_response.json()
+                    states = result.get("states", [])
+
+                    # Check if all proofs are UNSPENT at the mint
+                    all_unspent = all(state.get("state") == "UNSPENT" for state in states)
+
+                    if all_unspent:
+                        # Mark proof secrets as spent locally to prevent reuse
+                        for secret in proof_secrets:
+                            self.spent_secrets.add(secret)
+
+                        logger.info(f"Valid payment: {total_amount} sats (validation: {validation_time:.2f}ms)")
+                        logger.info(f"Tracking {len(proof_secrets)} spent proof secrets (total: {len(self.spent_secrets)})")
+                        self.stats['total_sats_earned'] += total_amount
+                        return True, f"Payment accepted: {total_amount} sats", total_amount
+                    else:
+                        spent_states = [state.get("state") for state in states]
+                        logger.warning(f"Token proofs already spent at mint: {spent_states}")
+                        return False, f"Token already spent", 0
                 else:
-                    logger.warning(f"Insufficient payment: {total_amount} sats < {REQUIRED_SATS} required")
-                    return False, f"Insufficient payment: {total_amount} sats", 0
-            else:
-                logger.warning("No proofs returned from token validation")
-                return False, "Invalid or already spent token", 0
+                    error_detail = checkstate_response.text
+                    logger.warning(f"Token validation failed: {checkstate_response.status_code} - {error_detail}")
+                    return False, f"Token invalid: {error_detail}", 0
 
         except Exception as e:
             validation_time = (time.time() - start_time) * 1000
@@ -175,8 +221,9 @@ class EncryptedEcashDVM:
                 )
                 return
 
-            # Extract ecash token
-            token = await self.extract_ecash_token(event.content(), event.tags().to_vec())
+            # Extract ecash token - convert tags to list of lists
+            tags_list = [[t.as_vec()[i] for i in range(len(t.as_vec()))] for t in event.tags()]
+            token = await self.extract_ecash_token(event.content(), tags_list)
 
             if not token:
                 self.stats['invalid_payments'] += 1
@@ -208,8 +255,8 @@ class EncryptedEcashDVM:
             echo_output = f"ECHO: {input_text}"
             logger.info(f"Processing paid request: '{input_text}' -> '{echo_output}'")
 
-            # Send encrypted response
-            await self.send_encrypted_response(event, event.author().to_hex(), echo_output)
+            # Send encrypted response with the ecash token (for paying relay on the way back)
+            await self.send_encrypted_response(event, event.author().to_hex(), echo_output, token)
 
             processing_time = (time.time() - start_time) * 1000
             self.stats['processing_times'].append(processing_time)
@@ -257,28 +304,34 @@ class EncryptedEcashDVM:
             except Exception as e:
                 logger.error(f"Error handling gift wrap: {e}")
 
-    async def send_encrypted_response(self, request_event: Event, recipient_pubkey_hex: str, output: str):
-        """Send encrypted DVM response"""
+    async def send_encrypted_response(self, request_event: Event, recipient_pubkey_hex: str, output: str, ecash_token: str):
+        """Send encrypted DVM response with ecash token for relay"""
         try:
-            # Create response event
-            response_builder = (
-                EventBuilder.new(Kind(DVM_SERVICE_KIND), output)
-                .add_tag(Tag.parse(["e", request_event.id().to_hex()]))
-                .add_tag(Tag.parse(["p", recipient_pubkey_hex]))
-                .add_tag(Tag.parse(["status", "success"]))
-                .add_tag(Tag.parse(["payment", f"{self.stats['total_sats_earned']} sats total earned"]))
-            )
+            # Create response tags (without EventBuilder)
+            response_tags = [
+                ["e", request_event.id().to_hex()],
+                ["p", recipient_pubkey_hex],
+                ["status", "success"],
+                ["payment", f"{self.stats['total_sats_earned']} sats total earned"]
+            ]
 
-            # Encrypt and send the response
-            recipient_pubkey = PublicKey.from_hex(recipient_pubkey_hex)
-            gift_wrap = await self.crypto.create_gift_wrap(
-                self.keys,
-                recipient_pubkey,
-                response_builder
+            # Encrypt and send the response using nip17_crypto
+            # The ecash token goes in the gift wrap tags (outer layer) to pay the relay
+            from nip17_crypto import encrypt_nip17_message
+            recipient_pubkey = PublicKey.parse(recipient_pubkey_hex)
+
+            gift_wrap = await encrypt_nip17_message(
+                sender_keys=self.keys,
+                recipient_pubkey=recipient_pubkey,
+                message_content=output,
+                message_tags=response_tags,
+                message_kind=DVM_SERVICE_KIND,
+                verbose=False,
+                gift_wrap_tags=[["ecash", ecash_token]]  # Add ecash token to gift wrap for relay
             )
 
             await self.client.send_event(gift_wrap)
-            logger.info(f"Sent encrypted response to {recipient_pubkey.to_bech32()}")
+            logger.info(f"Sent encrypted response to {recipient_pubkey.to_bech32()} with ecash token")
 
         except Exception as e:
             logger.error(f"Error sending encrypted response: {e}")
@@ -286,21 +339,25 @@ class EncryptedEcashDVM:
     async def send_encrypted_error_response(self, request_event: Event, recipient_pubkey_hex: str, error_msg: str):
         """Send encrypted error response"""
         try:
-            # Create error response
-            response_builder = (
-                EventBuilder.new(Kind(DVM_SERVICE_KIND), f"ERROR: {error_msg}")
-                .add_tag(Tag.parse(["e", request_event.id().to_hex()]))
-                .add_tag(Tag.parse(["p", recipient_pubkey_hex]))
-                .add_tag(Tag.parse(["status", "error"]))
-                .add_tag(Tag.parse(["error", error_msg]))
-            )
+            # Create error response tags (without EventBuilder)
+            response_tags = [
+                ["e", request_event.id().to_hex()],
+                ["p", recipient_pubkey_hex],
+                ["status", "error"],
+                ["error", error_msg]
+            ]
 
-            # Encrypt and send the error
-            recipient_pubkey = PublicKey.from_hex(recipient_pubkey_hex)
-            gift_wrap = await self.crypto.create_gift_wrap(
-                self.keys,
-                recipient_pubkey,
-                response_builder
+            # Encrypt and send the error using nip17_crypto
+            from nip17_crypto import encrypt_nip17_message
+            recipient_pubkey = PublicKey.parse(recipient_pubkey_hex)
+
+            gift_wrap = await encrypt_nip17_message(
+                sender_keys=self.keys,
+                recipient_pubkey=recipient_pubkey,
+                message_content=f"ERROR: {error_msg}",
+                message_tags=response_tags,
+                message_kind=DVM_SERVICE_KIND,
+                verbose=False
             )
 
             await self.client.send_event(gift_wrap)
@@ -311,25 +368,26 @@ class EncryptedEcashDVM:
 
     async def send_heartbeat(self):
         """Send periodic heartbeat to indicate service is alive"""
-        heartbeat = (
-            EventBuilder.new(
-                Kind(11998),
-                json.dumps({
-                    "status": "online",
-                    "type": "encrypted-ecash-echo",
-                    "payment_required": True,
-                    "price": f"{REQUIRED_SATS} sats",
-                    "stats": {
-                        "requests": self.stats['total_requests'],
-                        "valid_payments": self.stats['valid_payments'],
-                        "invalid_payments": self.stats['invalid_payments'],
-                        "total_earned": f"{self.stats['total_sats_earned']} sats",
-                        "unique_users": len(self.stats['unique_users'])
-                    }
-                })
-            )
-            .add_tag(Tag.parse(["d", "encrypted-ecash-echo"]))
-            .add_tag(Tag.parse(["k", str(DVM_SERVICE_KIND)]))
+        tags = [
+            Tag.parse(["d", "encrypted-ecash-echo"]),
+            Tag.parse(["k", str(DVM_SERVICE_KIND)])
+        ]
+        heartbeat = EventBuilder(
+            Kind(11998),
+            json.dumps({
+                "status": "online",
+                "type": "encrypted-ecash-echo",
+                "payment_required": True,
+                "price": f"{REQUIRED_SATS} sats",
+                "stats": {
+                    "requests": self.stats['total_requests'],
+                    "valid_payments": self.stats['valid_payments'],
+                    "invalid_payments": self.stats['invalid_payments'],
+                    "total_earned": f"{self.stats['total_sats_earned']} sats",
+                    "unique_users": len(self.stats['unique_users'])
+                }
+            }),
+            tags
         )
 
         await self.client.send_event_builder(heartbeat)
@@ -371,11 +429,9 @@ class EncryptedEcashDVM:
             self.keys = await self.load_or_create_keys()
             self.crypto = Nip17Crypto(self.keys)
 
-            # Initialize wallet
-            # Cashu 0.17.0 requires a database path
-            self.wallet = Wallet(MINT_URL, db="/data/ecash_wallet.db")
-            await self.wallet.load_mint()
-            logger.info(f"Connected to mint: {MINT_URL}")
+            # Note: We use the mint's REST API directly for token validation
+            # No wallet initialization needed
+            logger.info(f"Using mint at: {MINT_URL}")
 
             # Initialize Nostr client
             signer = NostrSigner.keys(self.keys)

@@ -117,15 +117,21 @@ class EcashValidator:
                     logger.error("Could not get keyset ID from mint")
                     return False, "Mint configuration error", (time.time() - start_time) * 1000
 
-                # Create a dummy blinded output for the full amount
-                # We use a valid compressed public key format (33 bytes: 0x02 or 0x03 prefix + 32 bytes)
-                import secrets
-                # Generate a valid compressed public key: 0x02 prefix + 32 random bytes
-                dummy_blinded_message = "02" + secrets.token_hex(32)  # 33 bytes (66 hex chars)
+                # Create properly formatted blinded messages using the cashu library
+                from cashu.core.crypto.secp import PrivateKey
+
+                # Create a blinded message for the full amount using proper cryptographic methods
+                # Generate a random blinding factor and derive the blinded point
+                blinding_factor = PrivateKey()
+
+                # The B_ field should be the full compressed public key (33 bytes with prefix)
+                # This is the format expected by the CDK mint for blinded messages
+                blinded_point = blinding_factor.pubkey
+                B_ = blinded_point.serialize().hex()  # Full compressed public key (33 bytes = 66 hex chars)
 
                 outputs_json = [{
                     "amount": total_amount,
-                    "B_": dummy_blinded_message,  # Blinded message (valid public key format)
+                    "B_": B_,  # Blinded message (compressed public key as 66-char hex string)
                     "id": keyset_id
                 }]
 

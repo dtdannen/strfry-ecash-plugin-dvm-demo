@@ -28,6 +28,7 @@ function hexToBytes(hex: string): Uint8Array {
  * @param content - The message content
  * @param tags - Optional tags for the message
  * @param kind - The kind of the inner message (default: 25000 for DVM)
+ * @param giftWrapTags - Optional additional tags for the gift wrap event (default: [])
  * @returns Object containing the gift wrap event and the unsigned message event ID
  */
 export async function encryptNip17Message(
@@ -35,7 +36,8 @@ export async function encryptNip17Message(
   recipientPubkey: string,
   content: string,
   tags: string[][] = [],
-  kind: number = 25000
+  kind: number = 25000,
+  giftWrapTags: string[][] = []
 ): Promise<{ giftWrap: NostrEvent; unsignedEventId: string }> {
   // Convert hex private key to Uint8Array for nostr-tools
   const senderPrivkeyBytes = hexToBytes(senderPrivkey)
@@ -93,7 +95,7 @@ export async function encryptNip17Message(
   const giftWrapEvent: UnsignedEvent = {
     kind: 1059,
     content: encryptedSeal,
-    tags: [['p', recipientPubkey]],
+    tags: [['p', recipientPubkey], ...giftWrapTags],
     created_at: giftWrapTimestamp,
     pubkey: randomPubkey
   }
