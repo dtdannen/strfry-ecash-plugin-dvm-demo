@@ -421,8 +421,11 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         setPerfProgress(i + 1)
         setPerfSendProgress(i + 1)
 
-        // Small delay like encrypted DVM test
-        await new Promise(resolve => setTimeout(resolve, 10))
+        // Yield event loop to prevent publish timeouts
+        const yieldFrequency = perfTokens.length <= 100 ? 1 : 10
+        if ((i + 1) % yieldFrequency === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
       }
 
       console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
