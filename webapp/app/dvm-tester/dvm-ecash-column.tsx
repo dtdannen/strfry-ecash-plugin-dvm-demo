@@ -91,6 +91,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   const [perfElapsedTime, setPerfElapsedTime] = useState(0)
   const perfRequestsRef = useRef<JobRequest[]>([])
   const [perfBatchMinting, setPerfBatchMinting] = useState(false)
+  const perfTimingRef = useRef<{ firstSentAt: number | null; lastReceivedAt: number | null }>({ firstSentAt: null, lastReceivedAt: null })
 
   // Performance test token management
   const [perfTokens, setPerfTokens] = useState<Array<{ relay: string; dvm: string }>>([])
@@ -356,6 +357,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
     setPerfReceiveProgress(0)
     setPerfRequests([])
     perfRequestsRef.current = []
+    perfTimingRef.current = { firstSentAt: null, lastReceivedAt: null }
 
     const startTime = Date.now()
     const timerInterval = setInterval(() => {
@@ -367,6 +369,10 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
       // Simple loop like encrypted DVM test - no batching
       for (let i = 0; i < perfTokens.length; i++) {
+        // Record first sent time
+        if (i === 0) {
+          perfTimingRef.current.firstSentAt = Date.now()
+        }
         const input = `Perf test ${i + 1}/${perfTokens.length}`
         const tokenPair = perfTokens[i]
 
@@ -546,6 +552,9 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
                     refRequest.responseTime = Date.now() - refRequest.timestamp
                     refRequest.responseContent = decrypted.content
                     refRequest.status = decrypted.tags.find((t: string[]) => t[0] === 'status')?.[1]
+
+                    // Update last received time
+                    perfTimingRef.current.lastReceivedAt = Date.now()
                   }
 
                   setPerfRequests(prev => prev.map(req =>
@@ -865,33 +874,54 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
           )}
 
           {/* Performance Results */}
-          {perfProgress > 0 && (
-            <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
-              <div>
-                <p className="text-gray-600">Success Rate</p>
-                <p className="font-semibold">
-                  {perfProgress > 0 ? ((perfRequests.filter(r => r.responseReceived).length / perfProgress) * 100).toFixed(1) : 0}%
-                </p>
+          {perfProgress > 0 && (() => {
+            const completedRequests = perfRequests.filter(r => r.responseReceived)
+            const avgTimePerJob = (() => {
+              if (completedRequests.length === 0) return 0
+              if (perfTimingRef.current.firstSentAt && perfTimingRef.current.lastReceivedAt) {
+                const totalTime = perfTimingRef.current.lastReceivedAt - perfTimingRef.current.firstSentAt
+                return totalTime / completedRequests.length
+              }
+              return completedRequests.reduce((sum, r) => sum + (r.responseTime || 0), 0) / completedRequests.length
+            })()
+
+            return (
+              <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
+                <div>
+                  <p className="text-gray-600">Success Rate</p>
+                  <p className="font-semibold">
+                    {perfProgress > 0 ? ((completedRequests.length / perfProgress) * 100).toFixed(1) : 0}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Avg Time</p>
+                  <p className="font-semibold">
+                    {avgTimePerJob.toFixed(0)} ms
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Throughput</p>
+                  <p className="font-semibold">
+                    {perfElapsedTime > 0 && completedRequests.length > 0
+                      ? (completedRequests.length / perfElapsedTime).toFixed(1)
+                      : 0} req/s
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="text-gray-600">Avg Time</p>
-                <p className="font-semibold">
-                  {perfRequests.filter(r => r.responseReceived).length > 0
-                    ? (perfRequests.filter(r => r.responseReceived).reduce((sum, r) => sum + (r.responseTime || 0), 0) / perfRequests.filter(r => r.responseReceived).length).toFixed(0)
-                    : 0} ms
-                </p>
-              </div>
-              <div>
-                <p className="text-gray-600">Throughput</p>
-                <p className="font-semibold">
-                  {perfElapsedTime > 0 && perfRequests.filter(r => r.responseReceived).length > 0
-                    ? (perfRequests.filter(r => r.responseReceived).length / perfElapsedTime).toFixed(1)
-                    : 0} req/s
-                </p>
-              </div>
-            </div>
-          )}
+            )
+          })()}
         </div>
+      </div>
+
+      {/* Performance Metrics Explanation */}
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-xs text-gray-700">
+        <p className="font-semibold text-blue-800 mb-2">ℹ️ Performance Metrics Explanation</p>
+        <p className="mb-1">
+          <span className="font-medium">Avg Time:</span> Calculated as (time from first request sent to last response received) / number of completed requests. This represents the average time per request across the entire batch, accounting for parallel processing.
+        </p>
+        <p>
+          <span className="font-medium">Throughput:</span> Requests completed per second, calculated as total completed requests / total elapsed time.
+        </p>
       </div>
     </div>
   )
