@@ -286,7 +286,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
       )
 
       // Send the encrypted request with relay token in gift wrap
-      await pool.publish([relayUrl], giftWrap)
+      pool.publish([relayUrl], giftWrap)
 
       const newRequest: JobRequest = {
         id: signedEvent.id,
@@ -403,7 +403,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
           [['ecash', tokenPair.relay]] // gift wrap tags with relay token
         )
 
-        await pool.publish([relayUrl], giftWrap)
+        pool.publish([relayUrl], giftWrap)
 
         const newRequest: JobRequest = {
           id: signedEvent.id,
@@ -421,11 +421,8 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         setPerfProgress(i + 1)
         setPerfSendProgress(i + 1)
 
-        // Yield event loop to prevent publish timeouts
-        const yieldFrequency = perfTokens.length <= 100 ? 1 : 10
-        if ((i + 1) % yieldFrequency === 0) {
-          await new Promise(resolve => setTimeout(resolve, 0))
-        }
+        // Slower sending for encrypted (more CPU intensive)
+        await new Promise(resolve => setTimeout(resolve, 10))
       }
 
       console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
