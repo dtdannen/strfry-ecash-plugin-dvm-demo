@@ -426,12 +426,13 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
     } catch (error) {
       console.error('Performance test error:', error)
-    } finally {
       setPerfRunning(false)
-
+      clearInterval(timerInterval)
+    } finally {
       const stopTimer = () => {
         setPerfElapsedTime((Date.now() - startTime) / 1000)
         clearInterval(timerInterval)
+        setPerfRunning(false)
       }
 
       // Check for completion like encrypted DVM test
@@ -789,7 +790,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
           >
             {perfMinting
-              ? `Minting tokens... (${Math.floor(perfMintProgress * 100)}%)`
+              ? `Minting tokens... (${Math.floor((perfMintProgress / perfRequestCount) * 100)}%)`
               : perfTokens.length > 0
                 ? 'Tokens Ready'
                 : `Mint ${perfRequestCount * 2} Tokens (${perfRequestCount * 2} sats)`
@@ -819,7 +820,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
             className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
           >
             {perfRunning
-              ? `Running test... (${Math.floor(perfProgress * 100)}%)`
+              ? `Running test... (${Math.floor((perfProgress / perfRequestCount) * 100)}%)`
               : perfTokens.length === 0
                 ? 'Mint Tokens First'
                 : `Run Performance Test (${perfRequestCount.toLocaleString()} requests)`
@@ -865,7 +866,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
           {/* Performance Results */}
           {perfProgress > 0 && (
-            <div className="grid grid-cols-2 gap-2 text-sm bg-gray-50 p-3 rounded">
+            <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
               <div>
                 <p className="text-gray-600">Success Rate</p>
                 <p className="font-semibold">
@@ -878,6 +879,14 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
                   {perfRequests.filter(r => r.responseReceived).length > 0
                     ? (perfRequests.filter(r => r.responseReceived).reduce((sum, r) => sum + (r.responseTime || 0), 0) / perfRequests.filter(r => r.responseReceived).length).toFixed(0)
                     : 0} ms
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-600">Throughput</p>
+                <p className="font-semibold">
+                  {perfElapsedTime > 0 && perfRequests.filter(r => r.responseReceived).length > 0
+                    ? (perfRequests.filter(r => r.responseReceived).length / perfElapsedTime).toFixed(1)
+                    : 0} req/s
                 </p>
               </div>
             </div>
