@@ -259,10 +259,20 @@ class EchoDVM:
 
 
 def load_or_create_keys():
-    """Load DVM keys from .env file or create new ones"""
-    env_file = Path("/data/.env")
+    """Load DVM keys from environment variable, .env file, or create new ones"""
 
-    # Try to load existing keys from .env file first
+    # First, check for environment variable (highest priority)
+    dvm_secret_key = os.getenv("DVM_SECRET_KEY")
+    if dvm_secret_key:
+        try:
+            keys = Keys.parse(dvm_secret_key)
+            print(f"🔑 Loaded plaintext DVM keys from environment variable")
+            return keys
+        except Exception as e:
+            print(f"❌ Error parsing DVM_SECRET_KEY from environment: {e}")
+
+    # Second, try to load existing keys from .env file
+    env_file = Path("/data/.env")
     if env_file.exists():
         with open(env_file, 'r') as f:
             for line in f:
@@ -276,7 +286,7 @@ def load_or_create_keys():
                         print(f"Error parsing keys from .env: {e}")
                         break
 
-    # Generate new keys if none found or parsing failed
+    # Last resort: generate new keys if none found or parsing failed
     keys = Keys.generate()
     nsec = keys.secret_key().to_bech32()
     npub = keys.public_key().to_bech32()

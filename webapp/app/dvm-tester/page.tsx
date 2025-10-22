@@ -53,9 +53,10 @@ export default function DVMTester() {
   const plainDvmNpub = process.env.NEXT_PUBLIC_DVM_NPUB
   const plainDvmPubkeyHex = process.env.NEXT_PUBLIC_DVM_PUBKEY_HEX
 
-  // Encrypted DVM configuration - hardcoded for now (from Docker logs)
-  const encryptedDvmNpub = 'npub1lpsgc7ttnp9kq0vqazd8hz0fqjug73kl5cl0apllnwamz6jl04uq8tgf8e'
-  const encryptedDvmPubkeyHex = 'f8608c796b984b603d80e89a7b89e904b88f46dfa63efe87ff9bbbb16a5f7d78'
+  // Encrypted DVM configuration from environment variables (fallback to empty if not set)
+  // Keys are dynamically loaded from DVM container on startup
+  const encryptedDvmNpub = process.env.NEXT_PUBLIC_ENCRYPTED_DVM_NPUB || 'npub1s5q6q334a7590q9ngurddpf6czmw8kf8vr7kxg4u0p36qpt558aq23wlvr'
+  const encryptedDvmPubkeyHex = process.env.NEXT_PUBLIC_ENCRYPTED_DVM_PUBKEY_HEX || '8501a04635efa85780b34706d6853ac0b6e3d92760fd6322bc7863a00574a1fa'
 
   if (!plainDvmNpub || !plainDvmPubkeyHex) {
     throw new Error('Plain DVM configuration environment variables are required: NEXT_PUBLIC_DVM_NPUB, NEXT_PUBLIC_DVM_PUBKEY_HEX')

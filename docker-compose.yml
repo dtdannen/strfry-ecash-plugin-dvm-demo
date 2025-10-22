@@ -73,23 +73,25 @@ services:
       context: ./webapp
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_DVM_NPUB=npub13lx4ddje7jflxm6fhrt35gvhcczcm8radxr50vzcj0zu30w95thq3gfast
-        - NEXT_PUBLIC_DVM_PUBKEY_HEX=8fcd56b659f493f36f49b8d71a2197c6058d9c7d698747b05893c5c8bdc5a2ee
+        - NEXT_PUBLIC_DVM_NPUB=npub1ka5cha8ryglxfelvyt6uyfe5224mgzu26c4utm8tkz8ukwjh279sr0af2q
+        - NEXT_PUBLIC_DVM_PUBKEY_HEX=b7698bf4e3223e64e7ec22f5c2273452abb40b8ad62bc5ecebb08fcb3a57578b
+        - NEXT_PUBLIC_ENCRYPTED_DVM_NPUB=npub1s5q6q334a7590q9ngurddpf6czmw8kf8vr7kxg4u0p36qpt558aq23wlvr
+        - NEXT_PUBLIC_ENCRYPTED_DVM_PUBKEY_HEX=8501a04635efa85780b34706d6853ac0b6e3d92760fd6322bc7863a00574a1fa
         - NEXT_PUBLIC_RELAY_URL=ws://localhost:7789
         - NEXT_PUBLIC_ECASH_RELAY_URL=ws://localhost:7788
-        - NEXT_PUBLIC_ECASH_DVM_NPUB=npub19k0w48cr0lr3zqeh9jna9nfv8m2u9chgyh6y3rw7l936asvr0dkq8ygmpl
-        - NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX=2d9eea9f037fc71103372ca7d2cd2c3ed5c2e2e825f4488ddef963aec1837b6c
+        - NEXT_PUBLIC_ECASH_DVM_NPUB=npub107gx7ld4g6u83cq22rrgus3fqj44sqxul9s9z7kp6jjmdd392edsjtnh7e
+        - NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX=7f906f7db546b878e00a50c68e422904ab5800dcf960517ac1d4a5b6b625565b
     container_name: ecash-webapp
     ports:
       - "3011:3000"
     environment:
       - MINT_URL=http://cdk-mint:8096
-      - NEXT_PUBLIC_DVM_NPUB=npub13lx4ddje7jflxm6fhrt35gvhcczcm8radxr50vzcj0zu30w95thq3gfast
-      - NEXT_PUBLIC_DVM_PUBKEY_HEX=8fcd56b659f493f36f49b8d71a2197c6058d9c7d698747b05893c5c8bdc5a2ee
+      - NEXT_PUBLIC_DVM_NPUB=npub1ka5cha8ryglxfelvyt6uyfe5224mgzu26c4utm8tkz8ukwjh279sr0af2q
+      - NEXT_PUBLIC_DVM_PUBKEY_HEX=b7698bf4e3223e64e7ec22f5c2273452abb40b8ad62bc5ecebb08fcb3a57578b
       - NEXT_PUBLIC_RELAY_URL=ws://localhost:7789
       - NEXT_PUBLIC_ECASH_RELAY_URL=ws://localhost:7788
-      - NEXT_PUBLIC_ECASH_DVM_NPUB=npub19k0w48cr0lr3zqeh9jna9nfv8m2u9chgyh6y3rw7l936asvr0dkq8ygmpl
-      - NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX=2d9eea9f037fc71103372ca7d2cd2c3ed5c2e2e825f4488ddef963aec1837b6c
+      - NEXT_PUBLIC_ECASH_DVM_NPUB=npub107gx7ld4g6u83cq22rrgus3fqj44sqxul9s9z7kp6jjmdd392edsjtnh7e
+      - NEXT_PUBLIC_ECASH_DVM_PUBKEY_HEX=7f906f7db546b878e00a50c68e422904ab5800dcf960517ac1d4a5b6b625565b
     volumes:
       - dvm-data:/dvm-data:ro
     depends_on:
@@ -106,6 +108,7 @@ services:
     container_name: dvm-echo
     environment:
       - RELAY_URL=ws://strfry-plain:7777
+      - DVM_SECRET_KEY=nsec1485qpda8kvhvxsqf6nv0erf5gmjusd4zgfennxflxkk0qrtwapysk4z4lf
     volumes:
       - dvm-data:/data
     depends_on:
@@ -121,6 +124,7 @@ services:
     container_name: dvm-encrypted
     environment:
       - RELAY_URL=ws://strfry-plain:7777
+      - DVM_SECRET_KEY=nsec1a98gptdp9k747gdplvq5xcrmevfk5ewwwzp9ay7r5nyayspn5x6qkeq3cv
     volumes:
       - dvm-encrypted-data:/data
     depends_on:
@@ -138,6 +142,7 @@ services:
       - RELAY_URL=ws://strfry-ecash:7777
       - MINT_URL=http://cdk-mint:8096
       - REQUIRED_SATS=1
+      - DVM_SECRET_KEY=nsec1whhz643vtw80hh7qmcxg827w8r2gd909e9twjrf857fte3gxmfgqvj48vg
     volumes:
       - dvm-encrypted-ecash-data:/data
     depends_on:

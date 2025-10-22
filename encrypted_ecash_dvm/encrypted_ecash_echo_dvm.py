@@ -74,9 +74,21 @@ class EncryptedEcashDVM:
         self.spent_secrets = set()  # Track spent proof secrets to prevent double-spending
 
     async def load_or_create_keys(self) -> Keys:
-        """Load existing keys or create new ones"""
+        """Load DVM keys from environment variable, .env file, or create new ones"""
+
+        # First, check for environment variable (highest priority)
+        dvm_secret_key = os.getenv("DVM_SECRET_KEY")
+        if dvm_secret_key:
+            try:
+                keys = Keys.parse(dvm_secret_key)
+                logger.info(f"🔑 Loaded ecash DVM keys from environment variable: {keys.public_key().to_bech32()}")
+                return keys
+            except Exception as e:
+                logger.error(f"❌ Error parsing DVM_SECRET_KEY from environment: {e}")
+
+        # Second, check for .env file
         if ENV_FILE.exists():
-            logger.info("Loading existing DVM keys...")
+            logger.info("Loading existing DVM keys from .env file...")
             with open(ENV_FILE, 'r') as f:
                 for line in f:
                     if line.startswith("DVM_PRIVATE_KEY="):
@@ -85,6 +97,7 @@ class EncryptedEcashDVM:
                         logger.info(f"Loaded DVM keys: {keys.public_key().to_bech32()}")
                         return keys
 
+        # Last resort: create new keys
         logger.info("Creating new DVM keys...")
         keys = Keys.generate()
         DATA_DIR.mkdir(parents=True, exist_ok=True)
