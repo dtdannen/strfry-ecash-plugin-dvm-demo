@@ -613,11 +613,10 @@ export default function DVMTester() {
       }
 
     } finally {
-      setPlainPerfRunning(false)
-
       const stopTimer = () => {
         setPlainPerfElapsedTime((Date.now() - startTime) / 1000)
         clearInterval(timerInterval)
+        setPlainPerfRunning(false)
       }
 
       const checkComplete = setInterval(() => {
@@ -678,11 +677,10 @@ export default function DVMTester() {
       }
 
     } finally {
-      setEncryptedPerfRunning(false)
-
       const stopTimer = () => {
         setEncryptedPerfElapsedTime((Date.now() - startTime) / 1000)
         clearInterval(timerInterval)
+        setEncryptedPerfRunning(false)
       }
 
       const checkComplete = setInterval(() => {

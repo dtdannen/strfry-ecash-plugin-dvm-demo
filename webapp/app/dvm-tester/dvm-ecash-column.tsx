@@ -100,6 +100,9 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   const [perfSendProgress, setPerfSendProgress] = useState(0)
   const [perfReceiveProgress, setPerfReceiveProgress] = useState(0)
 
+  // Buffer configuration - mint/send 1% extra to ensure clean success rate
+  const BUFFER_PERCENT = 0.01
+
   // Token wallet state
   const [tokenWallet, setTokenWallet] = useState<Array<{ token: string; amount: number; id: string }>>([])
   const [mintingBatch, setMintingBatch] = useState(false)
@@ -319,12 +322,14 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
     setPerfMintProgress(0)
     setPerfTokens([])
 
-    console.log(`Minting ${perfRequestCount * 2} tokens (${perfRequestCount} pairs)...`)
+    // Mint 1% extra tokens as buffer to ensure clean success rate
+    const tokensToMint = Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT))
+    console.log(`Minting ${tokensToMint * 2} tokens (${tokensToMint} pairs, ${perfRequestCount} requested + ${tokensToMint - perfRequestCount} buffer)...`)
     const tokenPairs: Array<{ relay: string; dvm: string }> = []
 
     try {
       // Simple loop like homepage - no batching
-      for (let i = 0; i < perfRequestCount; i++) {
+      for (let i = 0; i < tokensToMint; i++) {
         // Mint 2 tokens per request (relay + DVM)
         const relayToken = await mintToken(1)
         const dvmToken = await mintToken(1)
@@ -365,15 +370,16 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
     }, 100)
 
     try {
-      console.log(`Sending ${perfTokens.length} requests using pre-minted tokens...`)
+      console.log(`Sending ${perfTokens.length} requests (${perfRequestCount} requested + ${perfTokens.length - perfRequestCount} buffer)...`)
 
-      // Simple loop like encrypted DVM test - no batching
+      // Send all events including buffer - but display as requested count
       for (let i = 0; i < perfTokens.length; i++) {
         // Record first sent time
         if (i === 0) {
           perfTimingRef.current.firstSentAt = Date.now()
         }
-        const input = `Perf test ${i + 1}/${perfTokens.length}`
+        // Always display as "X/[requested count]" not actual count
+        const input = `Perf test ${i + 1}/${perfRequestCount}`
         const tokenPair = perfTokens[i]
 
         const unsignedEvent = {
@@ -403,7 +409,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
           [['ecash', tokenPair.relay]] // gift wrap tags with relay token
         )
 
-        pool.publish([relayUrl], giftWrap)
+        await pool.publish([relayUrl], giftWrap)
 
         const newRequest: JobRequest = {
           id: signedEvent.id,
@@ -421,11 +427,19 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         setPerfProgress(i + 1)
         setPerfSendProgress(i + 1)
 
-        // Slower sending for encrypted (more CPU intensive)
+        // Log progress every 100 events
+        if ((i + 1) % 100 === 0) {
+          const received = perfRequestsRef.current.filter(r => r.responseReceived).length
+          console.log(`📤 Sent ${i + 1}/${perfTokens.length} requests, ` +
+                      `📥 Received ${received} responses`)
+        }
+
+        // Small delay for encrypted (more CPU intensive)
         await new Promise(resolve => setTimeout(resolve, 10))
       }
 
       console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
+      console.log(`📤 All events sent - waiting for final responses...`)
 
       // Clear used tokens
       setPerfTokens([])
@@ -439,6 +453,20 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         setPerfElapsedTime((Date.now() - startTime) / 1000)
         clearInterval(timerInterval)
         setPerfRunning(false)
+
+        // Log final summary
+        const total = perfRequestsRef.current.length
+        const received = perfRequestsRef.current.filter(r => r.responseReceived).length
+        const missing = total - received
+
+        console.log(`🏁 Performance test complete:`)
+        console.log(`   Total sent: ${total}`)
+        console.log(`   Received: ${received} (${((received/total)*100).toFixed(1)}%)`)
+        console.log(`   Missing: ${missing}`)
+
+        if (missing > 0) {
+          console.warn(`   ⚠️ Check console for missing request IDs`)
+        }
       }
 
       // Check for completion like encrypted DVM test
@@ -450,11 +478,20 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         }
       }, 100)
 
-      // Timeout after 60 seconds
+      // Timeout after 300 seconds (5 minutes) - enough for 2000 events at current speed
       setTimeout(() => {
         clearInterval(checkComplete)
         stopTimer()
-      }, 60000)
+
+        // Log missing responses on timeout
+        const missingRequests = perfRequestsRef.current.filter(r => !r.responseReceived)
+        if (missingRequests.length > 0) {
+          console.warn(`⚠️ ${missingRequests.length} requests never received responses:`)
+          missingRequests.forEach(req => {
+            console.warn(`  - Request ID: ${req.id.substring(0, 16)}... (sent at ${new Date(req.timestamp).toISOString()})`)
+          })
+        }
+      }, 300000)
     }
   }
 
@@ -583,6 +620,18 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
       giftWrapSub.close()
     }
   }, [pool, connected, clientKeys, relayUrl, dvmConfig.pubkeyHex])
+
+  // Force re-render every second to update outstanding request waiting times
+  useEffect(() => {
+    const outstandingCount = perfRequests.filter(r => !r.responseReceived).length
+    if (outstandingCount > 0) {
+      const interval = setInterval(() => {
+        // Force re-render by updating state
+        setPerfRequests(prev => [...prev])
+      }, 1000)
+      return () => clearInterval(interval)
+    }
+  }, [perfRequests])
 
   return (
     <div className="space-y-6">
@@ -847,12 +896,12 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span>Encrypting & Sending</span>
-                  <span>{perfSendProgress}/{perfRequestCount}</span>
+                  <span>{Math.min(perfSendProgress, perfRequestCount)}/{perfRequestCount}</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
                     className="bg-blue-600 h-2 rounded-full transition-all"
-                    style={{ width: `${(perfSendProgress / perfRequestCount) * 100}%` }}
+                    style={{ width: `${(Math.min(perfSendProgress, perfRequestCount) / perfRequestCount) * 100}%` }}
                   />
                 </div>
               </div>
@@ -861,12 +910,12 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span>Decrypting & Receiving</span>
-                  <span>{perfRequests.filter(r => r.responseReceived).length}/{perfRequestCount}</span>
+                  <span>{Math.min(perfRequests.filter(r => r.responseReceived).length, perfRequestCount)}/{perfRequestCount}</span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
                     className="bg-green-600 h-2 rounded-full transition-all"
-                    style={{ width: `${(perfRequests.filter(r => r.responseReceived).length / perfRequestCount) * 100}%` }}
+                    style={{ width: `${(Math.min(perfRequests.filter(r => r.responseReceived).length, perfRequestCount) / perfRequestCount) * 100}%` }}
                   />
                 </div>
               </div>
@@ -875,7 +924,9 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
           {/* Performance Results */}
           {perfProgress > 0 && (() => {
-            const completedRequests = perfRequests.filter(r => r.responseReceived)
+            // Only count first perfRequestCount for stats (ignore buffer events)
+            const relevantRequests = perfRequests.slice(0, perfRequestCount)
+            const completedRequests = relevantRequests.filter(r => r.responseReceived)
             const avgTimePerJob = (() => {
               if (completedRequests.length === 0) return 0
               if (perfTimingRef.current.firstSentAt && perfTimingRef.current.lastReceivedAt) {
@@ -890,7 +941,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
                 <div>
                   <p className="text-gray-600">Success Rate</p>
                   <p className="font-semibold">
-                    {perfProgress > 0 ? ((completedRequests.length / perfProgress) * 100).toFixed(1) : 0}%
+                    {perfRequestCount > 0 ? ((completedRequests.length / perfRequestCount) * 100).toFixed(1) : 0}%
                   </p>
                 </div>
                 <div>
@@ -909,6 +960,83 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
                 </div>
               </div>
             )
+          })()}
+
+          {/* Show missing requests after test completes */}
+          {!perfRunning && perfProgress > 0 && (() => {
+            // Only show missing from first perfRequestCount (ignore buffer)
+            const missingRequests = perfRequests.slice(0, perfRequestCount).filter(r => !r.responseReceived)
+            if (missingRequests.length > 0) {
+              return (
+                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded">
+                  <h4 className="font-semibold text-red-800 mb-2">
+                    ⚠️ Missing Responses ({missingRequests.length})
+                  </h4>
+                  <div className="text-xs space-y-1 max-h-40 overflow-y-auto">
+                    {missingRequests.slice(0, 20).map((req, idx) => (
+                      <div key={idx} className="font-mono text-red-700">
+                        {idx + 1}. ID: {req.id.substring(0, 16)}...
+                        (sent: {new Date(req.timestamp).toLocaleTimeString()})
+                      </div>
+                    ))}
+                    {missingRequests.length > 20 && (
+                      <div className="text-red-600 italic">
+                        ... and {missingRequests.length - 20} more
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => {
+                      const ids = missingRequests.map(r => r.id).join('\n')
+                      navigator.clipboard.writeText(ids)
+                      alert('Copied missing request IDs to clipboard')
+                    }}
+                    className="mt-2 px-3 py-1 bg-red-600 text-white text-xs rounded hover:bg-red-700"
+                  >
+                    Copy All IDs to Clipboard
+                  </button>
+                </div>
+              )
+            }
+            return null
+          })()}
+
+          {/* Live Outstanding Requests - only show during test or if there are pending */}
+          {perfProgress > 0 && (() => {
+            // Only show outstanding from first perfRequestCount (ignore buffer)
+            const outstandingRequests = perfRequests.slice(0, perfRequestCount).filter(r => !r.responseReceived)
+            const now = Date.now()
+
+            if (outstandingRequests.length > 0) {
+              return (
+                <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded">
+                  <h4 className="font-semibold text-yellow-800 mb-2">
+                    ⏳ Outstanding Requests ({outstandingRequests.length})
+                  </h4>
+                  <div className="text-xs space-y-1 max-h-60 overflow-y-auto">
+                    {outstandingRequests.slice(0, 20).map((req, idx) => {
+                      const waitingTime = ((now - req.timestamp) / 1000).toFixed(1)
+                      return (
+                        <div key={idx} className="font-mono text-yellow-700 flex justify-between">
+                          <span>
+                            {idx + 1}. {req.input} - ID: {req.id.substring(0, 12)}...
+                          </span>
+                          <span className="font-semibold">
+                            {waitingTime}s
+                          </span>
+                        </div>
+                      )
+                    })}
+                    {outstandingRequests.length > 20 && (
+                      <div className="text-yellow-600 italic">
+                        ... and {outstandingRequests.length - 20} more
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            }
+            return null
           })()}
         </div>
       </div>
