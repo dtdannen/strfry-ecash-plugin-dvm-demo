@@ -98,21 +98,49 @@ export default function DVMTester() {
 
   // Performance test state for plain DVM
   const [plainPerfRequestCount, setPlainPerfRequestCount] = useState(2)
+  const [plainPerfMode, setPlainPerfMode] = useState<'sequential' | 'parallel'>('sequential')
   const [plainPerfRunning, setPlainPerfRunning] = useState(false)
   const [plainPerfProgress, setPlainPerfProgress] = useState(0)
   const [plainPerfRequests, setPlainPerfRequests] = useState<JobRequest[]>([])
   const plainPerfRequestsRef = useRef<JobRequest[]>([])
   const [plainPerfElapsedTime, setPlainPerfElapsedTime] = useState(0)
   const plainPerfTimingRef = useRef<{ firstSentAt: number; lastReceivedAt: number }>({ firstSentAt: 0, lastReceivedAt: 0 })
+  const [plainPerfFinalMetrics, setPlainPerfFinalMetrics] = useState<{
+    dvmType: string
+    mode: 'sequential' | 'parallel'
+    requestCount: number
+    completedCount: number
+    elapsedTime: number
+    throughput?: number
+    medianRTT: number
+    avgRTT: number
+    p95RTT: number
+    modeRTT?: number
+    timestamp: string
+  } | null>(null)
 
   // Performance test state for encrypted DVM
   const [encryptedPerfRequestCount, setEncryptedPerfRequestCount] = useState(1) // Start lower for encrypted
+  const [encryptedPerfMode, setEncryptedPerfMode] = useState<'sequential' | 'parallel'>('sequential')
   const [encryptedPerfRunning, setEncryptedPerfRunning] = useState(false)
   const [encryptedPerfProgress, setEncryptedPerfProgress] = useState(0)
   const [encryptedPerfRequests, setEncryptedPerfRequests] = useState<JobRequest[]>([])
   const encryptedPerfRequestsRef = useRef<JobRequest[]>([])
   const [encryptedPerfElapsedTime, setEncryptedPerfElapsedTime] = useState(0)
   const encryptedPerfTimingRef = useRef<{ firstSentAt: number; lastReceivedAt: number }>({ firstSentAt: 0, lastReceivedAt: 0 })
+  const [encryptedPerfFinalMetrics, setEncryptedPerfFinalMetrics] = useState<{
+    dvmType: string
+    mode: 'sequential' | 'parallel'
+    requestCount: number
+    completedCount: number
+    elapsedTime: number
+    throughput?: number
+    medianRTT: number
+    avgRTT: number
+    p95RTT: number
+    modeRTT?: number
+    timestamp: string
+  } | null>(null)
 
   // Nostr client
   const poolRef = useRef<SimplePool | null>(null)
@@ -583,54 +611,160 @@ export default function DVMTester() {
     }, 100)
 
     try {
-      for (let i = 0; i < count; i++) {
-        const input = `Test message ${i + 1}`
-        const eventId = await sendPlainJobRequest(input, true)
+      if (plainPerfMode === 'sequential') {
+        // Sequential mode: wait for each response before sending next
+        for (let i = 0; i < count; i++) {
+          const input = `Test message ${i + 1}`
+          const eventId = await sendPlainJobRequest(input, true)
 
-        if (eventId) {
-          const newRequest: JobRequest = {
-            id: eventId,
-            input,
-            timestamp: Date.now(),
-            responseReceived: false,
-            isEncrypted: false,
-            isPerfTest: true
+          if (eventId) {
+            const newRequest: JobRequest = {
+              id: eventId,
+              input,
+              timestamp: Date.now(),
+              responseReceived: false,
+              isEncrypted: false,
+              isPerfTest: true
+            }
+
+            if (i === 0) {
+              plainPerfTimingRef.current.firstSentAt = newRequest.timestamp
+            }
+
+            plainPerfRequestsRef.current.push(newRequest)
+            setPlainPerfRequests(prev => [...prev, newRequest])
+            setPlainPerfProgress(i + 1)
+
+            // Wait for response before sending next request
+            await new Promise<void>((resolve) => {
+              const checkResponse = setInterval(() => {
+                const request = plainPerfRequestsRef.current.find(r => r.id === eventId)
+                if (request?.responseReceived) {
+                  clearInterval(checkResponse)
+                  resolve()
+                }
+              }, 10)
+
+              // Timeout after 30 seconds
+              setTimeout(() => {
+                clearInterval(checkResponse)
+                resolve()
+              }, 30000)
+            })
           }
-
-          if (i === 0) {
-            plainPerfTimingRef.current.firstSentAt = newRequest.timestamp
-          }
-
-          plainPerfRequestsRef.current.push(newRequest)
-          setPlainPerfRequests(prev => [...prev, newRequest])
-          setPlainPerfProgress(i + 1)
         }
+      } else {
+        // Parallel mode: send all requests as fast as possible
+        for (let i = 0; i < count; i++) {
+          const input = `Test message ${i + 1}`
+          const eventId = await sendPlainJobRequest(input, true)
 
-        const yieldFrequency = count <= 100 ? 1 : 10
-        if ((i + 1) % yieldFrequency === 0) {
-          await new Promise(resolve => setTimeout(resolve, 0))
+          if (eventId) {
+            const newRequest: JobRequest = {
+              id: eventId,
+              input,
+              timestamp: Date.now(),
+              responseReceived: false,
+              isEncrypted: false,
+              isPerfTest: true
+            }
+
+            if (i === 0) {
+              plainPerfTimingRef.current.firstSentAt = newRequest.timestamp
+            }
+
+            plainPerfRequestsRef.current.push(newRequest)
+            setPlainPerfRequests(prev => [...prev, newRequest])
+            setPlainPerfProgress(i + 1)
+          }
+
+          // 1ms delay to allow event loop to process responses
+          await new Promise(resolve => setTimeout(resolve, 1))
         }
       }
 
     } finally {
       const stopTimer = () => {
-        setPlainPerfElapsedTime((Date.now() - startTime) / 1000)
+        const elapsedTime = (Date.now() - startTime) / 1000
+        setPlainPerfElapsedTime(elapsedTime)
         clearInterval(timerInterval)
         setPlainPerfRunning(false)
+
+        // Calculate and freeze all metrics
+        const completed = plainPerfRequestsRef.current.filter(r => r.responseReceived)
+        const responseTimes = completed
+          .map(r => r.responseTime)
+          .filter((t): t is number => t !== undefined)
+          .sort((a, b) => a - b)
+
+        // Calculate median
+        const median = responseTimes.length > 0
+          ? responseTimes.length % 2 === 0
+            ? (responseTimes[Math.floor(responseTimes.length / 2) - 1] + responseTimes[Math.floor(responseTimes.length / 2)]) / 2
+            : responseTimes[Math.floor(responseTimes.length / 2)]
+          : 0
+
+        // Calculate average
+        const avg = responseTimes.length > 0
+          ? responseTimes.reduce((sum, t) => sum + t, 0) / responseTimes.length
+          : 0
+
+        // Calculate P95
+        const p95 = responseTimes.length > 0
+          ? responseTimes[Math.floor(responseTimes.length * 0.95)] || 0
+          : 0
+
+        // Calculate mode (for parallel only)
+        let mode = 0
+        if (plainPerfMode === 'parallel' && responseTimes.length > 0) {
+          const roundedTimes = responseTimes.map(t => Math.round(t / 100) * 100)
+          const frequency = new Map<number, number>()
+          roundedTimes.forEach(time => {
+            frequency.set(time, (frequency.get(time) || 0) + 1)
+          })
+          let maxCount = 0
+          frequency.forEach((count, time) => {
+            if (count > maxCount) {
+              maxCount = count
+              mode = time
+            }
+          })
+        }
+
+        // Freeze metrics
+        setPlainPerfFinalMetrics({
+          dvmType: 'plain',
+          mode: plainPerfMode,
+          requestCount: count,
+          completedCount: completed.length,
+          elapsedTime,
+          throughput: plainPerfMode === 'parallel' ? completed.length / elapsedTime : undefined,
+          medianRTT: median,
+          avgRTT: avg,
+          p95RTT: p95,
+          modeRTT: plainPerfMode === 'parallel' ? mode : undefined,
+          timestamp: new Date().toISOString()
+        })
       }
 
-      const checkComplete = setInterval(() => {
-        const totalReceived = plainPerfRequestsRef.current.filter(r => r.responseReceived).length
-        if (totalReceived === plainPerfRequestsRef.current.length) {
+      if (plainPerfMode === 'sequential') {
+        // Sequential mode completes immediately after all responses
+        stopTimer()
+      } else {
+        // Parallel mode: wait for all responses
+        const checkComplete = setInterval(() => {
+          const totalReceived = plainPerfRequestsRef.current.filter(r => r.responseReceived).length
+          if (totalReceived === plainPerfRequestsRef.current.length) {
+            clearInterval(checkComplete)
+            stopTimer()
+          }
+        }, 100)
+
+        setTimeout(() => {
           clearInterval(checkComplete)
           stopTimer()
-        }
-      }, 100)
-
-      setTimeout(() => {
-        clearInterval(checkComplete)
-        stopTimer()
-      }, 60000)
+        }, 60000)
+      }
     }
   }
 
@@ -649,75 +783,166 @@ export default function DVMTester() {
     }, 100)
 
     try {
-      for (let i = 0; i < count; i++) {
-        const input = `Encrypted test ${i + 1}`
-        const eventId = await sendEncryptedJobRequest(input)
+      if (encryptedPerfMode === 'sequential') {
+        // Sequential mode: wait for each response before sending next
+        for (let i = 0; i < count; i++) {
+          const input = `Encrypted test ${i + 1}`
+          const eventId = await sendEncryptedJobRequest(input)
 
-        if (eventId) {
-          const newRequest: JobRequest = {
-            id: eventId,
-            input,
-            timestamp: Date.now(),
-            responseReceived: false,
-            isEncrypted: true,
-            isPerfTest: true
+          if (eventId) {
+            const newRequest: JobRequest = {
+              id: eventId,
+              input,
+              timestamp: Date.now(),
+              responseReceived: false,
+              isEncrypted: true,
+              isPerfTest: true
+            }
+
+            if (i === 0) {
+              encryptedPerfTimingRef.current.firstSentAt = newRequest.timestamp
+            }
+
+            encryptedPerfRequestsRef.current.push(newRequest)
+            setEncryptedPerfRequests(prev => [...prev, newRequest])
+            setEncryptedPerfProgress(i + 1)
+
+            // Wait for response before sending next request
+            await new Promise<void>((resolve) => {
+              const checkResponse = setInterval(() => {
+                const request = encryptedPerfRequestsRef.current.find(r => r.id === eventId)
+                if (request?.responseReceived) {
+                  clearInterval(checkResponse)
+                  resolve()
+                }
+              }, 10)
+
+              // Timeout after 30 seconds
+              setTimeout(() => {
+                clearInterval(checkResponse)
+                resolve()
+              }, 30000)
+            })
           }
-
-          if (i === 0) {
-            encryptedPerfTimingRef.current.firstSentAt = newRequest.timestamp
-          }
-
-          encryptedPerfRequestsRef.current.push(newRequest)
-          setEncryptedPerfRequests(prev => [...prev, newRequest])
-          setEncryptedPerfProgress(i + 1)
         }
+      } else {
+        // Parallel mode: send all requests with small delay
+        for (let i = 0; i < count; i++) {
+          const input = `Encrypted test ${i + 1}`
+          const eventId = await sendEncryptedJobRequest(input)
 
-        // Slower sending for encrypted (more CPU intensive)
-        await new Promise(resolve => setTimeout(resolve, 10))
+          if (eventId) {
+            const newRequest: JobRequest = {
+              id: eventId,
+              input,
+              timestamp: Date.now(),
+              responseReceived: false,
+              isEncrypted: true,
+              isPerfTest: true
+            }
+
+            if (i === 0) {
+              encryptedPerfTimingRef.current.firstSentAt = newRequest.timestamp
+            }
+
+            encryptedPerfRequestsRef.current.push(newRequest)
+            setEncryptedPerfRequests(prev => [...prev, newRequest])
+            setEncryptedPerfProgress(i + 1)
+          }
+
+          // 1ms delay to allow event loop to process responses
+          await new Promise(resolve => setTimeout(resolve, 1))
+        }
       }
 
     } finally {
       const stopTimer = () => {
-        setEncryptedPerfElapsedTime((Date.now() - startTime) / 1000)
+        const elapsedTime = (Date.now() - startTime) / 1000
+        setEncryptedPerfElapsedTime(elapsedTime)
         clearInterval(timerInterval)
         setEncryptedPerfRunning(false)
+
+        // Calculate and freeze all metrics
+        const completed = encryptedPerfRequestsRef.current.filter(r => r.responseReceived)
+        const responseTimes = completed
+          .map(r => r.responseTime)
+          .filter((t): t is number => t !== undefined)
+          .sort((a, b) => a - b)
+
+        // Calculate median
+        const median = responseTimes.length > 0
+          ? responseTimes.length % 2 === 0
+            ? (responseTimes[Math.floor(responseTimes.length / 2) - 1] + responseTimes[Math.floor(responseTimes.length / 2)]) / 2
+            : responseTimes[Math.floor(responseTimes.length / 2)]
+          : 0
+
+        // Calculate average
+        const avg = responseTimes.length > 0
+          ? responseTimes.reduce((sum, t) => sum + t, 0) / responseTimes.length
+          : 0
+
+        // Calculate P95
+        const p95 = responseTimes.length > 0
+          ? responseTimes[Math.floor(responseTimes.length * 0.95)] || 0
+          : 0
+
+        // Calculate mode (for parallel only)
+        let mode = 0
+        if (encryptedPerfMode === 'parallel' && responseTimes.length > 0) {
+          const roundedTimes = responseTimes.map(t => Math.round(t / 100) * 100)
+          const frequency = new Map<number, number>()
+          roundedTimes.forEach(time => {
+            frequency.set(time, (frequency.get(time) || 0) + 1)
+          })
+          let maxCount = 0
+          frequency.forEach((count, time) => {
+            if (count > maxCount) {
+              maxCount = count
+              mode = time
+            }
+          })
+        }
+
+        // Freeze metrics
+        setEncryptedPerfFinalMetrics({
+          dvmType: 'encrypted',
+          mode: encryptedPerfMode,
+          requestCount: count,
+          completedCount: completed.length,
+          elapsedTime,
+          throughput: encryptedPerfMode === 'parallel' ? completed.length / elapsedTime : undefined,
+          medianRTT: median,
+          avgRTT: avg,
+          p95RTT: p95,
+          modeRTT: encryptedPerfMode === 'parallel' ? mode : undefined,
+          timestamp: new Date().toISOString()
+        })
       }
 
-      const checkComplete = setInterval(() => {
-        const totalReceived = encryptedPerfRequestsRef.current.filter(r => r.responseReceived).length
-        if (totalReceived === encryptedPerfRequestsRef.current.length) {
+      if (encryptedPerfMode === 'sequential') {
+        // Sequential mode completes immediately after all responses
+        stopTimer()
+      } else {
+        // Parallel mode: wait for all responses
+        const checkComplete = setInterval(() => {
+          const totalReceived = encryptedPerfRequestsRef.current.filter(r => r.responseReceived).length
+          if (totalReceived === encryptedPerfRequestsRef.current.length) {
+            clearInterval(checkComplete)
+            stopTimer()
+          }
+        }, 100)
+
+        setTimeout(() => {
           clearInterval(checkComplete)
           stopTimer()
-        }
-      }, 100)
-
-      setTimeout(() => {
-        clearInterval(checkComplete)
-        stopTimer()
-      }, 60000)
+        }, 60000)
+      }
     }
   }
 
   // Calculate performance metrics
   const plainCompletedRequests = plainPerfRequests.filter(r => r.responseReceived)
-  const plainAvgTimePerJob = (() => {
-    if (plainCompletedRequests.length === 0) return 0
-    if (plainPerfTimingRef.current.firstSentAt && plainPerfTimingRef.current.lastReceivedAt) {
-      const totalTime = plainPerfTimingRef.current.lastReceivedAt - plainPerfTimingRef.current.firstSentAt
-      return totalTime / plainCompletedRequests.length
-    }
-    return plainCompletedRequests.reduce((sum, r) => sum + (r.responseTime || 0), 0) / plainCompletedRequests.length
-  })()
-
   const encryptedCompletedRequests = encryptedPerfRequests.filter(r => r.responseReceived)
-  const encryptedAvgTimePerJob = (() => {
-    if (encryptedCompletedRequests.length === 0) return 0
-    if (encryptedPerfTimingRef.current.firstSentAt && encryptedPerfTimingRef.current.lastReceivedAt) {
-      const totalTime = encryptedPerfTimingRef.current.lastReceivedAt - encryptedPerfTimingRef.current.firstSentAt
-      return totalTime / encryptedCompletedRequests.length
-    }
-    return encryptedCompletedRequests.reduce((sum, r) => sum + (r.responseTime || 0), 0) / encryptedCompletedRequests.length
-  })()
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100 p-8">
@@ -852,6 +1077,34 @@ export default function DVMTester() {
 
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Test Mode
+                </label>
+                <div className="flex gap-4 mb-4">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="sequential"
+                      checked={plainPerfMode === 'sequential'}
+                      onChange={(e) => setPlainPerfMode(e.target.value as 'sequential' | 'parallel')}
+                      disabled={plainPerfRunning}
+                      className="mr-2"
+                    />
+                    Sequential (User Experience)
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="parallel"
+                      checked={plainPerfMode === 'parallel'}
+                      onChange={(e) => setPlainPerfMode(e.target.value as 'sequential' | 'parallel')}
+                      disabled={plainPerfRunning}
+                      className="mr-2"
+                    />
+                    Parallel (System Capacity)
+                  </label>
+                </div>
+
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Requests: <span className="text-purple-600 font-bold">{getRequestCount(plainPerfRequestCount).toLocaleString()}</span>
                 </label>
                 <input
@@ -916,18 +1169,62 @@ export default function DVMTester() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-sm bg-gray-50 p-3 rounded">
-                    <div>
-                      <p className="text-gray-600">Success Rate</p>
-                      <p className="font-semibold">
-                        {plainPerfProgress > 0 ? ((plainCompletedRequests.length / plainPerfProgress) * 100).toFixed(1) : 0}%
-                      </p>
+                  {plainPerfFinalMetrics && plainPerfFinalMetrics.mode === 'sequential' ? (
+                    <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
+                      <div>
+                        <p className="text-gray-600">Median RTT</p>
+                        <p className="font-semibold">{plainPerfFinalMetrics.medianRTT.toFixed(0)} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Avg RTT</p>
+                        <p className="font-semibold">{plainPerfFinalMetrics.avgRTT.toFixed(0)} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">P95 RTT</p>
+                        <p className="font-semibold">{plainPerfFinalMetrics.p95RTT.toFixed(0)} ms</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-gray-600">Avg Time</p>
-                      <p className="font-semibold">{plainAvgTimePerJob.toFixed(0)} ms</p>
+                  ) : plainPerfFinalMetrics && plainPerfFinalMetrics.mode === 'parallel' ? (
+                    <div className="grid grid-cols-4 gap-2 text-sm bg-gray-50 p-3 rounded">
+                      <div>
+                        <p className="text-gray-600">Throughput</p>
+                        <p className="font-semibold">
+                          {plainPerfFinalMetrics.throughput?.toFixed(1) || '0'} req/s
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Mode RTT</p>
+                        <p className="font-semibold">{plainPerfFinalMetrics.modeRTT || 0} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Avg RTT</p>
+                        <p className="font-semibold">{plainPerfFinalMetrics.avgRTT.toFixed(0)} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">P95 RTT</p>
+                        <p className="font-semibold">{plainPerfFinalMetrics.p95RTT.toFixed(0)} ms</p>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
+
+                  {/* Export JSON button */}
+                  {plainPerfFinalMetrics && (
+                    <button
+                      onClick={() => {
+                        const dataStr = JSON.stringify(plainPerfFinalMetrics, null, 2)
+                        const dataBlob = new Blob([dataStr], { type: 'application/json' })
+                        const url = URL.createObjectURL(dataBlob)
+                        const link = document.createElement('a')
+                        link.href = url
+                        link.download = `plain-dvm-perf-${plainPerfFinalMetrics.mode}-${Date.now()}.json`
+                        link.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      className="w-full text-sm px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded transition"
+                    >
+                      📋 Export Metrics JSON
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -1043,6 +1340,34 @@ export default function DVMTester() {
 
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Test Mode
+                </label>
+                <div className="flex gap-4 mb-4">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="sequential"
+                      checked={encryptedPerfMode === 'sequential'}
+                      onChange={(e) => setEncryptedPerfMode(e.target.value as 'sequential' | 'parallel')}
+                      disabled={encryptedPerfRunning}
+                      className="mr-2"
+                    />
+                    Sequential (User Experience)
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="parallel"
+                      checked={encryptedPerfMode === 'parallel'}
+                      onChange={(e) => setEncryptedPerfMode(e.target.value as 'sequential' | 'parallel')}
+                      disabled={encryptedPerfRunning}
+                      className="mr-2"
+                    />
+                    Parallel (System Capacity)
+                  </label>
+                </div>
+
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Requests: <span className="text-green-600 font-bold">{getRequestCount(encryptedPerfRequestCount).toLocaleString()}</span>
                 </label>
                 <input
@@ -1106,18 +1431,62 @@ export default function DVMTester() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-sm bg-gray-50 p-3 rounded">
-                    <div>
-                      <p className="text-gray-600">Success Rate</p>
-                      <p className="font-semibold">
-                        {encryptedPerfProgress > 0 ? ((encryptedCompletedRequests.length / encryptedPerfProgress) * 100).toFixed(1) : 0}%
-                      </p>
+                  {encryptedPerfFinalMetrics && encryptedPerfFinalMetrics.mode === 'sequential' ? (
+                    <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
+                      <div>
+                        <p className="text-gray-600">Median RTT</p>
+                        <p className="font-semibold">{encryptedPerfFinalMetrics.medianRTT.toFixed(0)} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Avg RTT</p>
+                        <p className="font-semibold">{encryptedPerfFinalMetrics.avgRTT.toFixed(0)} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">P95 RTT</p>
+                        <p className="font-semibold">{encryptedPerfFinalMetrics.p95RTT.toFixed(0)} ms</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-gray-600">Avg Time</p>
-                      <p className="font-semibold">{encryptedAvgTimePerJob.toFixed(0)} ms</p>
+                  ) : encryptedPerfFinalMetrics && encryptedPerfFinalMetrics.mode === 'parallel' ? (
+                    <div className="grid grid-cols-4 gap-2 text-sm bg-gray-50 p-3 rounded">
+                      <div>
+                        <p className="text-gray-600">Throughput</p>
+                        <p className="font-semibold">
+                          {encryptedPerfFinalMetrics.throughput?.toFixed(1) || '0'} req/s
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Mode RTT</p>
+                        <p className="font-semibold">{encryptedPerfFinalMetrics.modeRTT || 0} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">Avg RTT</p>
+                        <p className="font-semibold">{encryptedPerfFinalMetrics.avgRTT.toFixed(0)} ms</p>
+                      </div>
+                      <div>
+                        <p className="text-gray-600">P95 RTT</p>
+                        <p className="font-semibold">{encryptedPerfFinalMetrics.p95RTT.toFixed(0)} ms</p>
+                      </div>
                     </div>
-                  </div>
+                  ) : null}
+
+                  {/* Export JSON button */}
+                  {encryptedPerfFinalMetrics && (
+                    <button
+                      onClick={() => {
+                        const dataStr = JSON.stringify(encryptedPerfFinalMetrics, null, 2)
+                        const dataBlob = new Blob([dataStr], { type: 'application/json' })
+                        const url = URL.createObjectURL(dataBlob)
+                        const link = document.createElement('a')
+                        link.href = url
+                        link.download = `encrypted-dvm-perf-${encryptedPerfFinalMetrics.mode}-${Date.now()}.json`
+                        link.click()
+                        URL.revokeObjectURL(url)
+                      }}
+                      className="w-full text-sm px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded transition"
+                    >
+                      📋 Export Metrics JSON
+                    </button>
+                  )}
                 </div>
               )}
             </div>

@@ -85,6 +85,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
   // Performance test state
   const [perfRequestCount, setPerfRequestCount] = useState(10)
+  const [perfMode, setPerfMode] = useState<'sequential' | 'parallel'>('sequential')
   const [perfRunning, setPerfRunning] = useState(false)
   const [perfProgress, setPerfProgress] = useState(0)
   const [perfRequests, setPerfRequests] = useState<JobRequest[]>([])
@@ -92,6 +93,19 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   const perfRequestsRef = useRef<JobRequest[]>([])
   const [perfBatchMinting, setPerfBatchMinting] = useState(false)
   const perfTimingRef = useRef<{ firstSentAt: number | null; lastReceivedAt: number | null }>({ firstSentAt: null, lastReceivedAt: null })
+  const [perfFinalMetrics, setPerfFinalMetrics] = useState<{
+    dvmType: string
+    mode: 'sequential' | 'parallel'
+    requestCount: number
+    completedCount: number
+    elapsedTime: number
+    throughput?: number
+    medianRTT: number
+    avgRTT: number
+    p95RTT: number
+    modeRTT?: number
+    timestamp: string
+  } | null>(null)
 
   // Performance test token management
   const [perfTokens, setPerfTokens] = useState<Array<{ relay: string; dvm: string }>>([])
@@ -100,8 +114,8 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   const [perfSendProgress, setPerfSendProgress] = useState(0)
   const [perfReceiveProgress, setPerfReceiveProgress] = useState(0)
 
-  // Buffer configuration - mint/send 1% extra to ensure clean success rate
-  const BUFFER_PERCENT = 0.01
+  // Buffer configuration - mint/send 2% extra to ensure clean success rate
+  const BUFFER_PERCENT = 0.02
 
   // Token wallet state
   const [tokenWallet, setTokenWallet] = useState<Array<{ token: string; amount: number; id: string }>>([])
@@ -322,7 +336,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
     setPerfMintProgress(0)
     setPerfTokens([])
 
-    // Mint 1% extra tokens as buffer to ensure clean success rate
+    // Mint 2% extra tokens as buffer to ensure clean success rate
     const tokensToMint = Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT))
     console.log(`Minting ${tokensToMint * 2} tokens (${tokensToMint} pairs, ${perfRequestCount} requested + ${tokensToMint - perfRequestCount} buffer)...`)
     const tokenPairs: Array<{ relay: string; dvm: string }> = []
@@ -370,79 +384,153 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
     }, 100)
 
     try {
-      console.log(`Sending ${perfTokens.length} requests (${perfRequestCount} requested + ${perfTokens.length - perfRequestCount} buffer)...`)
+      if (perfMode === 'sequential') {
+        // Sequential mode: wait for each response before sending next (no buffer needed)
+        console.log(`Sending ${perfRequestCount} requests sequentially...`)
 
-      // Send all events including buffer - but display as requested count
-      for (let i = 0; i < perfTokens.length; i++) {
-        // Record first sent time
-        if (i === 0) {
-          perfTimingRef.current.firstSentAt = Date.now()
+        for (let i = 0; i < perfRequestCount; i++) {
+          if (i === 0) {
+            perfTimingRef.current.firstSentAt = Date.now()
+          }
+
+          const input = `Perf test ${i + 1}/${perfRequestCount}`
+          const tokenPair = perfTokens[i]
+
+          const unsignedEvent = {
+            kind: 25000,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+              ['i', input],
+              ['ecash', tokenPair.dvm]
+            ],
+            content: `Performance test: ${input}`,
+            pubkey: clientKeys.publicKey
+          }
+
+          const signedEvent = finalizeEvent(unsignedEvent, clientKeys.secretKey)
+
+          // Encrypt the request
+          const secretKeyHex = Array.from(clientKeys.secretKey)
+            .map(byte => byte.toString(16).padStart(2, '0'))
+            .join('')
+
+          const { giftWrap } = await encryptNip17Message(
+            secretKeyHex,
+            dvmConfig.pubkeyHex,
+            signedEvent.content,
+            signedEvent.tags,
+            25000,
+            [['ecash', tokenPair.relay]]
+          )
+
+          await pool.publish([relayUrl], giftWrap)
+
+          const newRequest: JobRequest = {
+            id: signedEvent.id,
+            input,
+            timestamp: Date.now(),
+            responseReceived: false,
+            isEncrypted: true,
+            isPerfTest: true,
+            token: `Relay: 1 sat, DVM: 1 sat`,
+            tokenAmount: 2
+          }
+
+          perfRequestsRef.current.push(newRequest)
+          setPerfRequests(prev => [...prev, newRequest])
+          setPerfProgress(i + 1)
+          setPerfSendProgress(i + 1)
+
+          // Wait for response before sending next request
+          await new Promise<void>((resolve) => {
+            const checkResponse = setInterval(() => {
+              const request = perfRequestsRef.current.find(r => r.id === signedEvent.id)
+              if (request?.responseReceived) {
+                clearInterval(checkResponse)
+                resolve()
+              }
+            }, 10)
+
+            // Timeout after 30 seconds
+            setTimeout(() => {
+              clearInterval(checkResponse)
+              resolve()
+            }, 30000)
+          })
         }
-        // Always display as "X/[requested count]" not actual count
-        const input = `Perf test ${i + 1}/${perfRequestCount}`
-        const tokenPair = perfTokens[i]
 
-        const unsignedEvent = {
-          kind: 25000,
-          created_at: Math.floor(Date.now() / 1000),
-          tags: [
-            ['i', input],
-            ['ecash', tokenPair.dvm]
-          ],
-          content: `Performance test: ${input}`,
-          pubkey: clientKeys.publicKey
+        console.log(`Completed ${perfRequestCount} sequential requests`)
+      } else {
+        // Parallel mode: send all events including buffer
+        console.log(`Sending ${perfTokens.length} requests (${perfRequestCount} requested + ${perfTokens.length - perfRequestCount} buffer)...`)
+
+        for (let i = 0; i < perfTokens.length; i++) {
+          if (i === 0) {
+            perfTimingRef.current.firstSentAt = Date.now()
+          }
+
+          const input = `Perf test ${i + 1}/${perfRequestCount}`
+          const tokenPair = perfTokens[i]
+
+          const unsignedEvent = {
+            kind: 25000,
+            created_at: Math.floor(Date.now() / 1000),
+            tags: [
+              ['i', input],
+              ['ecash', tokenPair.dvm]
+            ],
+            content: `Performance test: ${input}`,
+            pubkey: clientKeys.publicKey
+          }
+
+          const signedEvent = finalizeEvent(unsignedEvent, clientKeys.secretKey)
+
+          // Encrypt the request
+          const secretKeyHex = Array.from(clientKeys.secretKey)
+            .map(byte => byte.toString(16).padStart(2, '0'))
+            .join('')
+
+          const { giftWrap } = await encryptNip17Message(
+            secretKeyHex,
+            dvmConfig.pubkeyHex,
+            signedEvent.content,
+            signedEvent.tags,
+            25000,
+            [['ecash', tokenPair.relay]]
+          )
+
+          await pool.publish([relayUrl], giftWrap)
+
+          const newRequest: JobRequest = {
+            id: signedEvent.id,
+            input,
+            timestamp: Date.now(),
+            responseReceived: false,
+            isEncrypted: true,
+            isPerfTest: true,
+            token: `Relay: 1 sat, DVM: 1 sat`,
+            tokenAmount: 2
+          }
+
+          perfRequestsRef.current.push(newRequest)
+          setPerfRequests(prev => [...prev, newRequest])
+          setPerfProgress(i + 1)
+          setPerfSendProgress(i + 1)
+
+          // Log progress every 100 events
+          if ((i + 1) % 100 === 0) {
+            const received = perfRequestsRef.current.filter(r => r.responseReceived).length
+            console.log(`📤 Sent ${i + 1}/${perfTokens.length} requests, ` +
+                        `📥 Received ${received} responses`)
+          }
+
+          // 100ms delay to allow event loop to process responses
+          await new Promise(resolve => setTimeout(resolve, 100))
         }
 
-        const signedEvent = finalizeEvent(unsignedEvent, clientKeys.secretKey)
-
-        // Encrypt the request
-        const secretKeyHex = Array.from(clientKeys.secretKey)
-          .map(byte => byte.toString(16).padStart(2, '0'))
-          .join('')
-
-        const { giftWrap } = await encryptNip17Message(
-          secretKeyHex,
-          dvmConfig.pubkeyHex,
-          signedEvent.content,
-          signedEvent.tags, // include the 'i' and 'ecash' tags
-          25000, // kind
-          [['ecash', tokenPair.relay]] // gift wrap tags with relay token
-        )
-
-        await pool.publish([relayUrl], giftWrap)
-
-        const newRequest: JobRequest = {
-          id: signedEvent.id,
-          input,
-          timestamp: Date.now(),
-          responseReceived: false,
-          isEncrypted: true,
-          isPerfTest: true,
-          token: `Relay: 1 sat, DVM: 1 sat`,
-          tokenAmount: 2
-        }
-
-        perfRequestsRef.current.push(newRequest)
-        setPerfRequests(prev => [...prev, newRequest])
-        setPerfProgress(i + 1)
-        setPerfSendProgress(i + 1)
-
-        // Log progress every 100 events
-        if ((i + 1) % 100 === 0) {
-          const received = perfRequestsRef.current.filter(r => r.responseReceived).length
-          console.log(`📤 Sent ${i + 1}/${perfTokens.length} requests, ` +
-                      `📥 Received ${received} responses`)
-        }
-
-        // Small delay for encrypted (more CPU intensive)
-        await new Promise(resolve => setTimeout(resolve, 10))
+        console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
+        console.log(`📤 All events sent - waiting for final responses...`)
       }
-
-      console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
-      console.log(`📤 All events sent - waiting for final responses...`)
-
-      // Clear used tokens
-      setPerfTokens([])
 
     } catch (error) {
       console.error('Performance test error:', error)
@@ -450,7 +538,8 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
       clearInterval(timerInterval)
     } finally {
       const stopTimer = () => {
-        setPerfElapsedTime((Date.now() - startTime) / 1000)
+        const elapsedTime = (Date.now() - startTime) / 1000
+        setPerfElapsedTime(elapsedTime)
         clearInterval(timerInterval)
         setPerfRunning(false)
 
@@ -467,31 +556,106 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         if (missing > 0) {
           console.warn(`   ⚠️ Check console for missing request IDs`)
         }
-      }
 
-      // Check for completion like encrypted DVM test
-      const checkComplete = setInterval(() => {
-        const totalReceived = perfRequestsRef.current.filter(r => r.responseReceived).length
-        if (totalReceived === perfRequestsRef.current.length) {
-          clearInterval(checkComplete)
-          stopTimer()
-        }
-      }, 100)
+        // Calculate and freeze all metrics (only for first perfRequestCount)
+        const relevantRequests = perfRequestsRef.current.slice(0, perfRequestCount)
+        const completed = relevantRequests.filter(r => r.responseReceived)
+        const responseTimes = completed
+          .map(r => r.responseTime)
+          .filter((t): t is number => t !== undefined)
+          .sort((a, b) => a - b)
 
-      // Timeout after 300 seconds (5 minutes) - enough for 2000 events at current speed
-      setTimeout(() => {
-        clearInterval(checkComplete)
-        stopTimer()
+        // Calculate median
+        const median = responseTimes.length > 0
+          ? responseTimes.length % 2 === 0
+            ? (responseTimes[Math.floor(responseTimes.length / 2) - 1] + responseTimes[Math.floor(responseTimes.length / 2)]) / 2
+            : responseTimes[Math.floor(responseTimes.length / 2)]
+          : 0
 
-        // Log missing responses on timeout
-        const missingRequests = perfRequestsRef.current.filter(r => !r.responseReceived)
-        if (missingRequests.length > 0) {
-          console.warn(`⚠️ ${missingRequests.length} requests never received responses:`)
-          missingRequests.forEach(req => {
-            console.warn(`  - Request ID: ${req.id.substring(0, 16)}... (sent at ${new Date(req.timestamp).toISOString()})`)
+        // Calculate average
+        const avg = responseTimes.length > 0
+          ? responseTimes.reduce((sum, t) => sum + t, 0) / responseTimes.length
+          : 0
+
+        // Calculate P95
+        const p95 = responseTimes.length > 0
+          ? responseTimes[Math.floor(responseTimes.length * 0.95)] || 0
+          : 0
+
+        // Calculate mode (for parallel only)
+        let mode = 0
+        if (perfMode === 'parallel' && responseTimes.length > 0) {
+          const roundedTimes = responseTimes.map(t => Math.round(t / 100) * 100)
+          const frequency = new Map<number, number>()
+          roundedTimes.forEach(time => {
+            frequency.set(time, (frequency.get(time) || 0) + 1)
+          })
+          let maxCount = 0
+          frequency.forEach((count, time) => {
+            if (count > maxCount) {
+              maxCount = count
+              mode = time
+            }
           })
         }
-      }, 300000)
+
+        // Freeze metrics
+        setPerfFinalMetrics({
+          dvmType: 'ecash',
+          mode: perfMode,
+          requestCount: perfRequestCount,
+          completedCount: completed.length,
+          elapsedTime,
+          throughput: perfMode === 'parallel' ? completed.length / elapsedTime : undefined,
+          medianRTT: median,
+          avgRTT: avg,
+          p95RTT: p95,
+          modeRTT: perfMode === 'parallel' ? mode : undefined,
+          timestamp: new Date().toISOString()
+        })
+
+        // Clear used tokens after test completes
+        setPerfTokens([])
+      }
+
+      if (perfMode === 'sequential') {
+        // Sequential mode completes immediately after all responses
+        stopTimer()
+      } else {
+        // Parallel mode: wait for perfRequestCount total responses (including buffer)
+        let hasStoppedTimer = false
+        const checkComplete = setInterval(() => {
+          const totalReceived = perfRequestsRef.current.filter(r => r.responseReceived).length
+
+          // Log progress every 100 responses
+          if (totalReceived % 100 === 0 && totalReceived > 0) {
+            console.log(`📊 Ecash perf test: ${totalReceived}/${perfRequestCount} received (including buffer)`)
+          }
+
+          if (totalReceived >= perfRequestCount && !hasStoppedTimer) {
+            hasStoppedTimer = true
+            console.log(`✅ Ecash perf test complete: ${totalReceived} total received (target: ${perfRequestCount}) - stopping timer`)
+            clearInterval(checkComplete)
+            stopTimer()
+          }
+        }, 10) // Check every 10ms instead of 100ms for faster detection
+
+        // Timeout after 300 seconds (5 minutes) - enough for 2000 events at current speed
+        setTimeout(() => {
+          clearInterval(checkComplete)
+          stopTimer()
+
+          // Log missing responses on timeout (only from first perfRequestCount)
+          const relevantRequests = perfRequestsRef.current.slice(0, perfRequestCount)
+          const missingRequests = relevantRequests.filter(r => !r.responseReceived)
+          if (missingRequests.length > 0) {
+            console.warn(`⚠️ ${missingRequests.length} requests never received responses:`)
+            missingRequests.forEach(req => {
+              console.warn(`  - Request ID: ${req.id.substring(0, 16)}... (sent at ${new Date(req.timestamp).toISOString()})`)
+            })
+          }
+        }, 300000)
+      }
     }
   }
 
@@ -797,6 +961,34 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
         <div className="space-y-4">
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Test Mode
+            </label>
+            <div className="flex gap-4 mb-4">
+              <label className="flex items-center">
+                <input
+                  type="radio"
+                  value="sequential"
+                  checked={perfMode === 'sequential'}
+                  onChange={(e) => setPerfMode(e.target.value as 'sequential' | 'parallel')}
+                  disabled={perfRunning || perfMinting}
+                  className="mr-2"
+                />
+                Sequential (User Experience)
+              </label>
+              <label className="flex items-center">
+                <input
+                  type="radio"
+                  value="parallel"
+                  checked={perfMode === 'parallel'}
+                  onChange={(e) => setPerfMode(e.target.value as 'sequential' | 'parallel')}
+                  disabled={perfRunning || perfMinting}
+                  className="mr-2"
+                />
+                Parallel (System Capacity)
+              </label>
+            </div>
+
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Number of Requests: <span className="font-mono text-purple-600">{perfRequestCount.toLocaleString()}</span>
             </label>
@@ -848,10 +1040,10 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-2 px-4 rounded-lg transition"
           >
             {perfMinting
-              ? `Minting tokens... (${Math.floor((perfMintProgress / perfRequestCount) * 100)}%)`
+              ? `Minting tokens... (${Math.floor((perfMintProgress / Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT))) * 100)}%)`
               : perfTokens.length > 0
                 ? 'Tokens Ready'
-                : `Mint ${perfRequestCount * 2} Tokens (${perfRequestCount * 2} sats)`
+                : `Mint ${Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT)) * 2} Tokens (${Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT)) * 2} sats with ${BUFFER_PERCENT * 100}% buffer)`
             }
           </button>
 
@@ -860,12 +1052,12 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
             <div className="space-y-2">
               <div className="flex justify-between text-xs">
                 <span>Minting Token Pairs</span>
-                <span>{perfMintProgress}/{perfRequestCount}</span>
+                <span>{perfMintProgress}/{Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT))}</span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-3">
                 <div
                   className="bg-blue-600 h-3 rounded-full transition-all"
-                  style={{ width: `${(perfMintProgress / perfRequestCount) * 100}%` }}
+                  style={{ width: `${(perfMintProgress / Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT))) * 100}%` }}
                 />
               </div>
             </div>
@@ -910,7 +1102,9 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span>Decrypting & Receiving</span>
-                  <span>{Math.min(perfRequests.filter(r => r.responseReceived).length, perfRequestCount)}/{perfRequestCount}</span>
+                  <span>
+                    {Math.min(perfRequests.filter(r => r.responseReceived).length, perfRequestCount)}/{perfRequestCount}
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
@@ -924,48 +1118,73 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
           {/* Performance Results */}
           {perfProgress > 0 && (() => {
-            // Only count first perfRequestCount for stats (ignore buffer events)
-            const relevantRequests = perfRequests.slice(0, perfRequestCount)
-            const completedRequests = relevantRequests.filter(r => r.responseReceived)
-            const avgTimePerJob = (() => {
-              if (completedRequests.length === 0) return 0
-              if (perfTimingRef.current.firstSentAt && perfTimingRef.current.lastReceivedAt) {
-                const totalTime = perfTimingRef.current.lastReceivedAt - perfTimingRef.current.firstSentAt
-                return totalTime / completedRequests.length
-              }
-              return completedRequests.reduce((sum, r) => sum + (r.responseTime || 0), 0) / completedRequests.length
-            })()
-
-            return (
-              <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
-                <div>
-                  <p className="text-gray-600">Success Rate</p>
-                  <p className="font-semibold">
-                    {perfRequestCount > 0 ? ((completedRequests.length / perfRequestCount) * 100).toFixed(1) : 0}%
-                  </p>
+            if (perfFinalMetrics && perfFinalMetrics.mode === 'sequential') {
+              return (
+                <div className="grid grid-cols-3 gap-2 text-sm bg-gray-50 p-3 rounded">
+                  <div>
+                    <p className="text-gray-600">Median RTT</p>
+                    <p className="font-semibold">{perfFinalMetrics.medianRTT.toFixed(0)} ms</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Avg RTT</p>
+                    <p className="font-semibold">{perfFinalMetrics.avgRTT.toFixed(0)} ms</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">P95 RTT</p>
+                    <p className="font-semibold">{perfFinalMetrics.p95RTT.toFixed(0)} ms</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-gray-600">Avg Time</p>
-                  <p className="font-semibold">
-                    {avgTimePerJob.toFixed(0)} ms
-                  </p>
+              )
+            } else if (perfFinalMetrics && perfFinalMetrics.mode === 'parallel') {
+              return (
+                <div className="grid grid-cols-4 gap-2 text-sm bg-gray-50 p-3 rounded">
+                  <div>
+                    <p className="text-gray-600">Throughput</p>
+                    <p className="font-semibold">
+                      {perfFinalMetrics.throughput?.toFixed(1) || '0'} req/s
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Mode RTT</p>
+                    <p className="font-semibold">{perfFinalMetrics.modeRTT || 0} ms</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Avg RTT</p>
+                    <p className="font-semibold">{perfFinalMetrics.avgRTT.toFixed(0)} ms</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">P95 RTT</p>
+                    <p className="font-semibold">{perfFinalMetrics.p95RTT.toFixed(0)} ms</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-gray-600">Throughput</p>
-                  <p className="font-semibold">
-                    {perfElapsedTime > 0 && completedRequests.length > 0
-                      ? (completedRequests.length / perfElapsedTime).toFixed(1)
-                      : 0} req/s
-                  </p>
-                </div>
-              </div>
-            )
+              )
+            }
+            return null
           })()}
+
+          {/* Export JSON button */}
+          {perfFinalMetrics && (
+            <button
+              onClick={() => {
+                const dataStr = JSON.stringify(perfFinalMetrics, null, 2)
+                const dataBlob = new Blob([dataStr], { type: 'application/json' })
+                const url = URL.createObjectURL(dataBlob)
+                const link = document.createElement('a')
+                link.href = url
+                link.download = `ecash-dvm-perf-${perfFinalMetrics.mode}-${Date.now()}.json`
+                link.click()
+                URL.revokeObjectURL(url)
+              }}
+              className="w-full text-sm px-3 py-2 bg-purple-500 hover:bg-purple-600 text-white rounded transition"
+            >
+              📋 Export Metrics JSON
+            </button>
+          )}
 
           {/* Show missing requests after test completes */}
           {!perfRunning && perfProgress > 0 && (() => {
-            // Only show missing from first perfRequestCount (ignore buffer)
-            const missingRequests = perfRequests.slice(0, perfRequestCount).filter(r => !r.responseReceived)
+            // Show ALL missing requests including buffer
+            const missingRequests = perfRequests.filter(r => !r.responseReceived)
             if (missingRequests.length > 0) {
               return (
                 <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded">
@@ -1003,8 +1222,8 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
 
           {/* Live Outstanding Requests - only show during test or if there are pending */}
           {perfProgress > 0 && (() => {
-            // Only show outstanding from first perfRequestCount (ignore buffer)
-            const outstandingRequests = perfRequests.slice(0, perfRequestCount).filter(r => !r.responseReceived)
+            // Show ALL outstanding requests including buffer
+            const outstandingRequests = perfRequests.filter(r => !r.responseReceived)
             const now = Date.now()
 
             if (outstandingRequests.length > 0) {
@@ -1041,14 +1260,60 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
         </div>
       </div>
 
+      {/* Debug Info Panel */}
+      <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 text-xs">
+        <p className="font-semibold text-yellow-900 mb-2">🔍 Debug Info</p>
+        <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+          <div>
+            <span className="text-gray-600">BUFFER_PERCENT:</span>
+            <span className="ml-2 font-bold">{BUFFER_PERCENT}</span>
+          </div>
+          <div>
+            <span className="text-gray-600">Expected tokens:</span>
+            <span className="ml-2 font-bold">{Math.ceil(perfRequestCount * (1 + BUFFER_PERCENT))}</span>
+          </div>
+          <div>
+            <span className="text-gray-600">Minted tokens:</span>
+            <span className="ml-2 font-bold">{perfTokens.length}</span>
+          </div>
+          <div>
+            <span className="text-gray-600">perfRequests.length:</span>
+            <span className="ml-2 font-bold">{perfRequests.length}</span>
+          </div>
+          <div>
+            <span className="text-gray-600">Received count:</span>
+            <span className="ml-2 font-bold">{perfRequests.filter(r => r.responseReceived).length}</span>
+          </div>
+          <div>
+            <span className="text-gray-600">Missing count:</span>
+            <span className="ml-2 font-bold text-red-600">{perfRequests.filter(r => !r.responseReceived).length}</span>
+          </div>
+        </div>
+      </div>
+
       {/* Performance Metrics Explanation */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-xs text-gray-700">
         <p className="font-semibold text-blue-800 mb-2">ℹ️ Performance Metrics Explanation</p>
-        <p className="mb-1">
-          <span className="font-medium">Avg Time:</span> Calculated as (time from first request sent to last response received) / number of completed requests. This represents the average time per request across the entire batch, accounting for parallel processing.
+        <p className="mb-2">
+          <span className="font-medium">Sequential Mode (User Experience):</span> Measures single-request performance without contention. Perfect for comparing overhead between Plain, Encrypted, and Ecash DVMs.
         </p>
-        <p>
-          <span className="font-medium">Throughput:</span> Requests completed per second, calculated as total completed requests / total elapsed time.
+        <p className="mb-1 ml-4">
+          • <span className="font-medium">Median RTT:</span> 50th percentile latency (half of requests faster, half slower)
+        </p>
+        <p className="mb-1 ml-4">
+          • <span className="font-medium">Avg RTT:</span> Average of all individual request round trip times
+        </p>
+        <p className="mb-2 ml-4">
+          • <span className="font-medium">P95 RTT:</span> 95th percentile latency (worst-case for most requests)
+        </p>
+        <p className="mb-1">
+          <span className="font-medium">Parallel Mode (System Capacity):</span> Measures throughput and performance under load. Shows how the system handles concurrent requests.
+        </p>
+        <p className="mb-1 ml-4">
+          • <span className="font-medium">Throughput:</span> Completed requests per second (benefits from parallelism)
+        </p>
+        <p className="mb-1 ml-4">
+          • <span className="font-medium">Avg/P95 RTT (load):</span> Latency metrics under concurrent load
         </p>
       </div>
     </div>
