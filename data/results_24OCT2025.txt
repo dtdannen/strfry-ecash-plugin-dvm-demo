@@ -76,13 +76,13 @@ Parallel tests:
   "mode": "parallel",
   "requestCount": 1000,
   "completedCount": 1000,
-  "elapsedTime": 70.662,
-  "throughput": 14.151877954204522,
-  "medianRTT": 188,
-  "avgRTT": 188.186,
-  "p95RTT": 214,
+  "elapsedTime": 10.349,
+  "throughput": 96.62769349695623,
+  "medianRTT": 187,
+  "avgRTT": 187.033,
+  "p95RTT": 211,
   "modeRTT": 200,
-  "timestamp": "2025-10-25T00:48:47.070Z"
+  "timestamp": "2025-10-27T18:56:20.430Z"
 }
 
 {
@@ -90,13 +90,13 @@ Parallel tests:
   "mode": "parallel",
   "requestCount": 1000,
   "completedCount": 1000,
-  "elapsedTime": 32.84,
-  "throughput": 30.45066991473812,
-  "medianRTT": 354,
-  "avgRTT": 351.07,
-  "p95RTT": 431,
+  "elapsedTime": 32.044,
+  "throughput": 31.207090250905008,
+  "medianRTT": 365,
+  "avgRTT": 363.313,
+  "p95RTT": 421,
   "modeRTT": 400,
-  "timestamp": "2025-10-25T00:48:27.236Z"
+  "timestamp": "2025-10-27T18:57:29.766Z"
 }
 
 
@@ -116,7 +116,6 @@ Parallel tests:
 }
 
 # and this one is with delay of 100ms in between sending:
-
 {
   "dvmType": "ecash",
   "mode": "parallel",
@@ -132,7 +131,6 @@ Parallel tests:
 }
 
 # and this one is with 50ms delay between sending:
-
 {
   "dvmType": "ecash",
   "mode": "parallel",
@@ -145,4 +143,35 @@ Parallel tests:
   "p95RTT": 25533,
   "modeRTT": 20000,
   "timestamp": "2025-10-25T03:11:22.127Z"
+}
+
+# this is with 75ms delay
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 998,
+  "elapsedTime": 101.948,
+  "throughput": 9.789304351237886,
+  "medianRTT": 312,
+  "avgRTT": 320.73547094188376,
+  "p95RTT": 407,
+  "modeRTT": 300,
+  "timestamp": "2025-10-27T19:34:58.917Z"
+}
+
+# and this is with a 60ms delay
+
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 992,
+  "elapsedTime": 92.261,
+  "throughput": 10.752105440001735,
+  "medianRTT": 5159,
+  "avgRTT": 4817.224798387097,
+  "p95RTT": 7891,
+  "modeRTT": 7000,
+  "timestamp": "2025-10-27T19:47:09.017Z"
 }

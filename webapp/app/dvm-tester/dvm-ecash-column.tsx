@@ -86,6 +86,7 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
   // Performance test state
   const [perfRequestCount, setPerfRequestCount] = useState(10)
   const [perfMode, setPerfMode] = useState<'sequential' | 'parallel'>('sequential')
+  const [perfParallelDelay, setPerfParallelDelay] = useState(60) // Delay in ms between parallel requests
   const [perfRunning, setPerfRunning] = useState(false)
   const [perfProgress, setPerfProgress] = useState(0)
   const [perfRequests, setPerfRequests] = useState<JobRequest[]>([])
@@ -524,8 +525,8 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
                         `📥 Received ${received} responses`)
           }
 
-          // 100ms delay to allow event loop to process responses
-          await new Promise(resolve => setTimeout(resolve, 100))
+          // Configurable delay to allow event loop to process responses
+          await new Promise(resolve => setTimeout(resolve, perfParallelDelay))
         }
 
         console.log(`Sent ${perfTokens.length} encrypted ecash requests`)
@@ -1009,6 +1010,28 @@ export function DVMEcashColumn({ pool, connected, clientKeys, relayUrl }: DVMEca
               Total cost: {(perfRequestCount * 2).toLocaleString()} sats ({perfRequestCount} relay + {perfRequestCount} DVM)
             </p>
           </div>
+
+          {/* Parallel Mode Delay Control */}
+          {perfMode === 'parallel' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Parallel Request Delay: <span className="font-mono text-purple-600">{perfParallelDelay}ms</span>
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="200"
+                step="5"
+                value={perfParallelDelay}
+                onChange={(e) => setPerfParallelDelay(parseInt(e.target.value))}
+                disabled={perfRunning || perfMinting}
+                className="w-full"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Delay between sending each request (0-200ms). Lower values = faster sending, but may overwhelm the system.
+              </p>
+            </div>
+          )}
 
           {/* Token Status Display */}
           {perfTokens.length > 0 && (
