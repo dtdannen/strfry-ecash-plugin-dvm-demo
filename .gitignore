@@ -5,3 +5,4 @@ venv/
 webapp/.next/
 output/*.png
 output/*.svg
+screenshots/
