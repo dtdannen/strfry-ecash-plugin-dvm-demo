@@ -165,7 +165,12 @@ docker compose down -v
 The webapp provides two main pages:
 
 #### 1. Ecash Mint Testing (`/`)
-![Mint Testing Interface](screenshots/mint-interface.png)
+
+**Minting Tokens:**
+![Ecash Minting](screenshots/ecash_minting.png)
+
+**Spending Tokens:**
+![Ecash Spending](screenshots/ecash_spending.png)
 
 Features:
 - **Mint Tokens**: Create 1-sat ecash tokens
@@ -176,7 +181,7 @@ Features:
   - Performance metrics (throughput, latency)
 
 #### 2. DVM Performance Tester (`/dvm-tester`)
-![DVM Tester Interface](screenshots/dvm-tester.png)
+![DVM Testing Page](screenshots/dvm_testing_page.png)
 
 Features:
 - Side-by-side comparison of three DVM types:
