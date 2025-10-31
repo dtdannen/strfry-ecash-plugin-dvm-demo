@@ -1,3 +1,8 @@
 .trees/
 webapp/node_modules/
 cdk/
+venv/
+webapp/.next/
+output/*.png
+output/*.svg
+screenshots/

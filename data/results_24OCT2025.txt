@@ -1,0 +1,177 @@
+This data was from an experiment run on 10/24/2025 at 12:48pm PST
+
+sequential data:
+
+🔓 Plain Performance Test
+Test Mode
+Sequential (User Experience)
+Parallel (System Capacity)
+Requests: 100
+101001K10K100K
+Time: 58.4s
+Sending100/100
+Receiving100/100
+
+Median RTT
+
+218 ms
+
+Avg RTT
+
+220 ms
+
+P95 RTT
+
+236 ms
+
+🔐 Encrypted Performance Test
+Test Mode
+Sequential (User Experience)
+Parallel (System Capacity)
+Requests: 100
+101001K10K
+Time: 25.8s
+Encrypting & Sending100/100
+Decrypting & Receiving100/100
+
+Median RTT
+
+235 ms
+
+Avg RTT
+
+235 ms
+
+P95 RTT
+
+247 ms
+
+Ecash Performance Test
+Test Mode
+Sequential (User Experience)
+Parallel (System Capacity)
+Number of Requests: 100
+
+Total cost: 200 sats (100 relay + 100 DVM)
+Time: 40.9s
+Encrypting & Sending100/100
+Decrypting & Receiving100/100
+
+Median RTT
+
+389 ms
+
+Avg RTT
+
+388 ms
+
+P95 RTT
+
+415 ms
+
+Parallel tests:
+
+{
+  "dvmType": "plain",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 1000,
+  "elapsedTime": 10.349,
+  "throughput": 96.62769349695623,
+  "medianRTT": 187,
+  "avgRTT": 187.033,
+  "p95RTT": 211,
+  "modeRTT": 200,
+  "timestamp": "2025-10-27T18:56:20.430Z"
+}
+
+{
+  "dvmType": "encrypted",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 1000,
+  "elapsedTime": 32.044,
+  "throughput": 31.207090250905008,
+  "medianRTT": 365,
+  "avgRTT": 363.313,
+  "p95RTT": 421,
+  "modeRTT": 400,
+  "timestamp": "2025-10-27T18:57:29.766Z"
+}
+
+
+# note: This is with a delay of 5ms
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 980,
+  "elapsedTime": 99.012,
+  "throughput": 9.897790166848463,
+  "medianRTT": 65131,
+  "avgRTT": 60471.1581632653,
+  "p95RTT": 78320,
+  "modeRTT": 68200,
+  "timestamp": "2025-10-25T02:52:33.400Z"
+}
+
+# and this one is with delay of 100ms in between sending:
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 993,
+  "elapsedTime": 145.961,
+  "throughput": 6.803187152732579,
+  "medianRTT": 289,
+  "avgRTT": 295.5498489425982,
+  "p95RTT": 318,
+  "modeRTT": 300,
+  "timestamp": "2025-10-25T03:02:36.817Z"
+}
+
+# and this one is with 50ms delay between sending:
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 980,
+  "elapsedTime": 94.216,
+  "throughput": 10.401630296340326,
+  "medianRTT": 16158,
+  "avgRTT": 15087.547959183674,
+  "p95RTT": 25533,
+  "modeRTT": 20000,
+  "timestamp": "2025-10-25T03:11:22.127Z"
+}
+
+# this is with 75ms delay
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 998,
+  "elapsedTime": 101.948,
+  "throughput": 9.789304351237886,
+  "medianRTT": 312,
+  "avgRTT": 320.73547094188376,
+  "p95RTT": 407,
+  "modeRTT": 300,
+  "timestamp": "2025-10-27T19:34:58.917Z"
+}
+
+# and this is with a 60ms delay
+
+{
+  "dvmType": "ecash",
+  "mode": "parallel",
+  "requestCount": 1000,
+  "completedCount": 992,
+  "elapsedTime": 92.261,
+  "throughput": 10.752105440001735,
+  "medianRTT": 5159,
+  "avgRTT": 4817.224798387097,
+  "p95RTT": 7891,
+  "modeRTT": 7000,
+  "timestamp": "2025-10-27T19:47:09.017Z"
+}

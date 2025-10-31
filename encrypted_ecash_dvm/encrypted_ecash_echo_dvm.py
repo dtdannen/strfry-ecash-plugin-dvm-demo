@@ -1,0 +1,500 @@
+#!/usr/bin/env python3
+"""
+NIP-17 Encrypted Echo DVM with Ecash Payment Validation
+Processes encrypted DVM requests after validating ecash payment tokens.
+"""
+
+import asyncio
+import json
+import os
+import time
+from typing import Optional, Dict, Any, List
+from pathlib import Path
+import logging
+from datetime import datetime
+from collections import defaultdict
+
+from nostr_sdk import (
+    Client, NostrSigner, NostrDatabase, Keys, PublicKey, EventBuilder,
+    Filter, HandleNotification, Event, Kind, Tag, Timestamp, RelayOptions,
+    EventId, Alphabet, RelayUrl
+)
+
+import httpx
+from cashu.core.base import TokenV4
+from nip17_crypto import Nip17Crypto
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("encrypted_ecash_dvm")
+
+# Configuration
+RELAY_URL = os.getenv("RELAY_URL", "ws://localhost:7777")
+MINT_URL = os.getenv("MINT_URL", "http://cdk-mint:8096")
+REQUIRED_SATS = int(os.getenv("REQUIRED_SATS", "1"))
+DATA_DIR = Path("/data")
+ENV_FILE = DATA_DIR / ".env"
+
+# DVM configuration
+DVM_SERVICE_KIND = 25000  # Echo service
+GIFT_WRAP_KIND = 1059
+
+class EcashDVMHandler(HandleNotification):
+    def __init__(self, dvm):
+        self.dvm = dvm
+
+    async def handle(self, relay_url: str, subscription_id: str, event: Event):
+        """Handle incoming events"""
+        asyncio.create_task(self.dvm.handle_event(event, relay_url))
+
+    async def handle_msg(self, relay_url: str, msg: str):
+        """Handle relay messages"""
+        pass
+
+class EncryptedEcashDVM:
+    def __init__(self):
+        self.keys = None
+        self.client = None
+        self.processed_jobs = set()
+        self.crypto = None
+        self.stats = {
+            'total_requests': 0,
+            'valid_payments': 0,
+            'invalid_payments': 0,
+            'processing_errors': 0,
+            'validation_times': [],
+            'processing_times': [],
+            'total_sats_earned': 0,
+            'unique_users': set()
+        }
+        self.user_spending = defaultdict(int)  # Track spending per user
+        self.spent_secrets = set()  # Track spent proof secrets to prevent double-spending
+
+    async def load_or_create_keys(self) -> Keys:
+        """Load DVM keys from environment variable, .env file, or create new ones"""
+
+        # First, check for environment variable (highest priority)
+        dvm_secret_key = os.getenv("DVM_SECRET_KEY")
+        if dvm_secret_key:
+            try:
+                keys = Keys.parse(dvm_secret_key)
+                logger.info(f"🔑 Loaded ecash DVM keys from environment variable: {keys.public_key().to_bech32()}")
+                return keys
+            except Exception as e:
+                logger.error(f"❌ Error parsing DVM_SECRET_KEY from environment: {e}")
+
+        # Second, check for .env file
+        if ENV_FILE.exists():
+            logger.info("Loading existing DVM keys from .env file...")
+            with open(ENV_FILE, 'r') as f:
+                for line in f:
+                    if line.startswith("DVM_PRIVATE_KEY="):
+                        private_key = line.strip().split('=')[1]
+                        keys = Keys.parse(private_key)
+                        logger.info(f"Loaded DVM keys: {keys.public_key().to_bech32()}")
+                        return keys
+
+        # Last resort: create new keys
+        logger.info("Creating new DVM keys...")
+        keys = Keys.generate()
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        with open(ENV_FILE, 'w') as f:
+            f.write(f"DVM_PRIVATE_KEY={keys.secret_key().to_hex()}\n")
+            f.write(f"DVM_NPUB={keys.public_key().to_bech32()}\n")
+            f.write(f"DVM_PUBKEY_HEX={keys.public_key().to_hex()}\n")
+
+        logger.info(f"Created new DVM with npub: {keys.public_key().to_bech32()}")
+        return keys
+
+    async def extract_ecash_token(self, content: str, tags: List[List[str]]) -> Optional[str]:
+        """Extract ecash token from event content or tags"""
+        # Check tags first
+        for tag in tags:
+            if len(tag) >= 2 and tag[0] == 'ecash':
+                logger.info("Found ecash token in tag")
+                return tag[1]
+
+        # Check content for cashu tokens
+        import re
+        cashu_pattern = r'(cashu[AB][A-Za-z0-9+/]+=*)'
+        match = re.search(cashu_pattern, content)
+        if match:
+            logger.info("Found ecash token in content")
+            return match.group(1)
+
+        return None
+
+    async def validate_ecash_payment(self, token: str) -> tuple[bool, str, int]:
+        """
+        Validate and redeem ecash token.
+        Returns (is_valid, message, amount_sats)
+        """
+        start_time = time.time()
+
+        try:
+            # Deserialize the token string into TokenV4 object
+            token_obj = TokenV4.deserialize(token)
+
+            # Extract proofs from the token
+            if not token_obj.proofs or len(token_obj.proofs) == 0:
+                logger.warning("Token has no proofs")
+                return False, "Token has no proofs", 0
+
+            proofs_to_validate = token_obj.proofs
+            total_amount = sum(p.amount for p in proofs_to_validate)
+
+            # Check if amount is sufficient
+            if total_amount < REQUIRED_SATS:
+                logger.warning(f"Insufficient payment: {total_amount} sats < {REQUIRED_SATS} required")
+                return False, f"Insufficient payment: {total_amount} sats", 0
+
+            # First check if we've already seen these proof secrets (local double-spend check)
+            proof_secrets = [p.secret for p in proofs_to_validate]
+            already_spent = [s for s in proof_secrets if s in self.spent_secrets]
+            if already_spent:
+                logger.warning(f"Token contains already spent proofs: {len(already_spent)} proofs")
+                return False, "Token already spent", 0
+
+            # Use the checkstate endpoint to validate the token with the mint (NUT-07)
+            async with httpx.AsyncClient() as client:
+                # Get the Y values (public keys) from the proofs
+                proof_ys = [p.C for p in proofs_to_validate]
+
+                # Check the state of the proofs with the mint
+                checkstate_response = await client.post(
+                    f"{MINT_URL}/v1/checkstate",
+                    json={
+                        "Ys": proof_ys
+                    },
+                    timeout=10.0
+                )
+
+                validation_time = (time.time() - start_time) * 1000
+                self.stats['validation_times'].append(validation_time)
+
+                if checkstate_response.status_code == 200:
+                    result = checkstate_response.json()
+                    states = result.get("states", [])
+
+                    # Check if all proofs are UNSPENT at the mint
+                    all_unspent = all(state.get("state") == "UNSPENT" for state in states)
+
+                    if all_unspent:
+                        # Mark proof secrets as spent locally to prevent reuse
+                        for secret in proof_secrets:
+                            self.spent_secrets.add(secret)
+
+                        logger.info(f"Valid payment: {total_amount} sats (validation: {validation_time:.2f}ms)")
+                        logger.info(f"Tracking {len(proof_secrets)} spent proof secrets (total: {len(self.spent_secrets)})")
+                        self.stats['total_sats_earned'] += total_amount
+                        return True, f"Payment accepted: {total_amount} sats", total_amount
+                    else:
+                        spent_states = [state.get("state") for state in states]
+                        logger.warning(f"Token proofs already spent at mint: {spent_states}")
+                        return False, f"Token already spent", 0
+                else:
+                    error_detail = checkstate_response.text
+                    logger.warning(f"Token validation failed: {checkstate_response.status_code} - {error_detail}")
+                    return False, f"Token invalid: {error_detail}", 0
+
+        except Exception as e:
+            validation_time = (time.time() - start_time) * 1000
+            self.stats['validation_times'].append(validation_time)
+
+            error_msg = str(e)
+            if "already spent" in error_msg.lower():
+                logger.warning(f"Token already spent: {error_msg}")
+                return False, "Token already spent", 0
+            else:
+                logger.error(f"Error validating token: {error_msg}")
+                return False, f"Payment validation error: {error_msg}", 0
+
+    async def process_dvm_request(self, event: Event):
+        """Process decrypted DVM request with ecash validation"""
+        start_time = time.time()
+
+        try:
+            # Extract input from 'i' tags
+            input_text = None
+            for tag in event.tags():
+                if tag.as_vec()[0] == "i":
+                    input_text = tag.as_vec()[1] if len(tag.as_vec()) > 1 else None
+                    break
+
+            if not input_text:
+                logger.warning("No input text found in DVM request")
+                await self.send_encrypted_error_response(
+                    event,
+                    event.author().to_hex(),
+                    "No input provided"
+                )
+                return
+
+            # Extract ecash token - convert tags to list of lists
+            tags_list = [[t.as_vec()[i] for i in range(len(t.as_vec()))] for t in event.tags()]
+            token = await self.extract_ecash_token(event.content(), tags_list)
+
+            if not token:
+                self.stats['invalid_payments'] += 1
+                logger.warning("No ecash token found in request")
+                await self.send_encrypted_error_response(
+                    event,
+                    event.author().to_hex(),
+                    f"Payment required: {REQUIRED_SATS} sats minimum"
+                )
+                return
+
+            # Validate ecash payment
+            is_valid, payment_msg, amount = await self.validate_ecash_payment(token)
+
+            if not is_valid:
+                self.stats['invalid_payments'] += 1
+                await self.send_encrypted_error_response(
+                    event,
+                    event.author().to_hex(),
+                    payment_msg
+                )
+                return
+
+            self.stats['valid_payments'] += 1
+            self.stats['unique_users'].add(event.author().to_hex())
+            self.user_spending[event.author().to_hex()] += amount
+
+            # Process the echo request
+            echo_output = f"ECHO: {input_text}"
+            logger.info(f"Processing paid request: '{input_text}' -> '{echo_output}'")
+
+            # Send encrypted response with the ecash token (for paying relay on the way back)
+            await self.send_encrypted_response(event, event.author().to_hex(), echo_output, token)
+
+            processing_time = (time.time() - start_time) * 1000
+            self.stats['processing_times'].append(processing_time)
+            logger.info(f"Request processed in {processing_time:.2f}ms (payment: {amount} sats)")
+
+        except Exception as e:
+            self.stats['processing_errors'] += 1
+            logger.error(f"Error processing DVM request: {e}")
+            await self.send_encrypted_error_response(
+                event,
+                event.author().to_hex(),
+                "Processing error occurred"
+            )
+
+    async def handle_event(self, event: Event, relay_url: str):
+        """Handle incoming events"""
+        self.stats['total_requests'] += 1
+
+        # Handle gift-wrapped events
+        if event.kind().as_u16() == GIFT_WRAP_KIND:
+            event_id = event.id().to_hex()
+
+            if event_id in self.processed_jobs:
+                logger.debug(f"Skipping already processed job: {event_id}")
+                return
+
+            self.processed_jobs.add(event_id)
+            logger.info(f"Received gift wrap from {relay_url}")
+
+            try:
+                # Decrypt the gift wrap
+                decrypted = await self.crypto.decrypt_gift_wrap(event)
+
+                if decrypted:
+                    seal_event, inner_event, sender_pubkey = decrypted
+                    logger.info(f"Decrypted request from {sender_pubkey}")
+
+                    # Check if it's a DVM request
+                    if inner_event.kind().as_u16() == DVM_SERVICE_KIND:
+                        # Process with ecash validation
+                        await self.process_dvm_request(inner_event)
+                else:
+                    logger.warning("Failed to decrypt gift wrap")
+
+            except Exception as e:
+                logger.error(f"Error handling gift wrap: {e}")
+
+    async def send_encrypted_response(self, request_event: Event, recipient_pubkey_hex: str, output: str, ecash_token: str):
+        """Send encrypted DVM response with ecash token for relay"""
+        try:
+            # Create response tags (without EventBuilder)
+            response_tags = [
+                ["e", request_event.id().to_hex()],
+                ["p", recipient_pubkey_hex],
+                ["status", "success"],
+                ["payment", f"{self.stats['total_sats_earned']} sats total earned"]
+            ]
+
+            # Encrypt and send the response using nip17_crypto
+            # The ecash token goes in the gift wrap tags (outer layer) to pay the relay
+            from nip17_crypto import encrypt_nip17_message
+            recipient_pubkey = PublicKey.parse(recipient_pubkey_hex)
+
+            gift_wrap = await encrypt_nip17_message(
+                sender_keys=self.keys,
+                recipient_pubkey=recipient_pubkey,
+                message_content=output,
+                message_tags=response_tags,
+                message_kind=DVM_SERVICE_KIND,
+                verbose=False,
+                gift_wrap_tags=[["ecash", ecash_token]]  # Add ecash token to gift wrap for relay
+            )
+
+            await self.client.send_event(gift_wrap)
+            logger.info(f"Sent encrypted response to {recipient_pubkey.to_bech32()} with ecash token")
+
+        except Exception as e:
+            logger.error(f"Error sending encrypted response: {e}")
+
+    async def send_encrypted_error_response(self, request_event: Event, recipient_pubkey_hex: str, error_msg: str):
+        """Send encrypted error response"""
+        try:
+            # Create error response tags (without EventBuilder)
+            response_tags = [
+                ["e", request_event.id().to_hex()],
+                ["p", recipient_pubkey_hex],
+                ["status", "error"],
+                ["error", error_msg]
+            ]
+
+            # Encrypt and send the error using nip17_crypto
+            from nip17_crypto import encrypt_nip17_message
+            recipient_pubkey = PublicKey.parse(recipient_pubkey_hex)
+
+            gift_wrap = await encrypt_nip17_message(
+                sender_keys=self.keys,
+                recipient_pubkey=recipient_pubkey,
+                message_content=f"ERROR: {error_msg}",
+                message_tags=response_tags,
+                message_kind=DVM_SERVICE_KIND,
+                verbose=False
+            )
+
+            await self.client.send_event(gift_wrap)
+            logger.info(f"Sent encrypted error response: {error_msg}")
+
+        except Exception as e:
+            logger.error(f"Error sending encrypted error response: {e}")
+
+    async def send_heartbeat(self):
+        """Send periodic heartbeat to indicate service is alive"""
+        tags = [
+            Tag.parse(["d", "encrypted-ecash-echo"]),
+            Tag.parse(["k", str(DVM_SERVICE_KIND)])
+        ]
+        heartbeat = EventBuilder(
+            Kind(11998),
+            json.dumps({
+                "status": "online",
+                "type": "encrypted-ecash-echo",
+                "payment_required": True,
+                "price": f"{REQUIRED_SATS} sats",
+                "stats": {
+                    "requests": self.stats['total_requests'],
+                    "valid_payments": self.stats['valid_payments'],
+                    "invalid_payments": self.stats['invalid_payments'],
+                    "total_earned": f"{self.stats['total_sats_earned']} sats",
+                    "unique_users": len(self.stats['unique_users'])
+                }
+            }),
+            tags
+        )
+
+        await self.client.send_event_builder(heartbeat)
+        logger.debug(f"Heartbeat sent - Earned: {self.stats['total_sats_earned']} sats, "
+                    f"Users: {len(self.stats['unique_users'])}")
+
+    async def print_stats(self):
+        """Print periodic statistics"""
+        while True:
+            await asyncio.sleep(60)  # Print stats every minute
+
+            if self.stats['validation_times']:
+                avg_validation = sum(self.stats['validation_times']) / len(self.stats['validation_times'])
+            else:
+                avg_validation = 0
+
+            if self.stats['processing_times']:
+                avg_processing = sum(self.stats['processing_times']) / len(self.stats['processing_times'])
+            else:
+                avg_processing = 0
+
+            logger.info(f"""
+            ===== ECASH DVM STATISTICS =====
+            Total Requests: {self.stats['total_requests']}
+            Valid Payments: {self.stats['valid_payments']}
+            Invalid Payments: {self.stats['invalid_payments']}
+            Processing Errors: {self.stats['processing_errors']}
+            Total Earned: {self.stats['total_sats_earned']} sats
+            Unique Users: {len(self.stats['unique_users'])}
+            Avg Validation Time: {avg_validation:.2f}ms
+            Avg Processing Time: {avg_processing:.2f}ms
+            ================================
+            """)
+
+    async def run(self):
+        """Main DVM loop"""
+        try:
+            # Load or create keys
+            self.keys = await self.load_or_create_keys()
+            self.crypto = Nip17Crypto(self.keys)
+
+            # Note: We use the mint's REST API directly for token validation
+            # No wallet initialization needed
+            logger.info(f"Using mint at: {MINT_URL}")
+
+            # Initialize Nostr client
+            signer = NostrSigner.keys(self.keys)
+            self.client = Client(signer)
+
+            # Add relay
+            relay_url = RelayUrl.parse(RELAY_URL)
+            await self.client.add_relay(relay_url)
+            await self.client.connect()
+            logger.info(f"Connected to relay: {RELAY_URL}")
+
+            # Subscribe to gift wraps sent to us
+            my_pubkey = self.keys.public_key()
+            filter_gift_wrap = (
+                Filter()
+                .kind(Kind(GIFT_WRAP_KIND))
+                .pubkey(my_pubkey)
+            )
+
+            await self.client.subscribe(filter_gift_wrap)
+            logger.info(f"Subscribed to encrypted requests for {my_pubkey.to_bech32()}")
+
+            # Handle events
+            handler = EcashDVMHandler(self)
+            await self.client.handle_notifications(handler)
+
+            # Start background tasks
+            asyncio.create_task(self.print_stats())
+
+            # Send heartbeat every 10 seconds
+            while True:
+                await self.send_heartbeat()
+                await asyncio.sleep(10)
+
+        except Exception as e:
+            logger.error(f"DVM error: {e}")
+            raise
+
+async def main():
+    logger.info(f"""
+    ======================================
+    Starting Encrypted Ecash Echo DVM
+    Relay: {RELAY_URL}
+    Mint: {MINT_URL}
+    Price: {REQUIRED_SATS} sats per request
+    ======================================
+    """)
+
+    dvm = EncryptedEcashDVM()
+    await dvm.run()
+
+if __name__ == "__main__":
+    asyncio.run(main())
