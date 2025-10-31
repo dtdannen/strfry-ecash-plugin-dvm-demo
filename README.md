@@ -143,7 +143,7 @@ docker compose down -v
 - **Technology**: Next.js 14, React, TypeScript, Tailwind CSS
 
 ### 6. DVM Echo (`dvm-echo`)
-- **Purpose**: Basic echo DVM as detailed here: https://habla.news/a/naddr1qvzqqqr4gupzpkscaxrqqs8nhaynsahuz6c6jy4wtfhkl2x4zkwrmc4cyvaqmxz3qqxnzde4xscrzwpexyerzdes85ynm8
+- **Purpose**: Basic echo DVM as detailed [here](https://habla.news/a/naddr1qvzqqqr4gupzpkscaxrqqs8nhaynsahuz6c6jy4wtfhkl2x4zkwrmc4cyvaqmxz3qqxnzde4xscrzwpexyerzdes85ynm8)
 - **Relay**: Default Strfry relay (no payment required)
 - **Response**: Returns the input message
 
