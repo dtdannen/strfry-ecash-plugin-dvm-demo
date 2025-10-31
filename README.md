@@ -7,7 +7,10 @@ A proof-of-concept implementation demonstrating ecash-based rate-limiting for No
 This demo implements a complete ecash payment system for Nostr DVMs, including:
 - Cashu ecash mint for issuing tokens
 - Custom Strfry relay plugin for validating and consuming ecash
-- Multiple DVMs (standard and ecash-gated)
+- Multiple DVMs so we can compare performance tradeoffs of adding encryption and ecash validation
+  - A plaintext DVM with no encryption or ecash, everything is visible to the relay
+  - An encrypted DVM using NIP-17 that relies on the goodwill of public relays to broadcast gift wrapped notes signed by random npubs
+  - An encrypted DVM also using NIP-17 that attaches ecash to pay the relay for each note
 - Web interface for minting tokens and performance testing
 
 ## Architecture
@@ -114,6 +117,7 @@ docker compose down -v
 - **Purpose**: Issues and validates Cashu ecash tokens
 - **Technology**: [Cashu Development Kit (CDK)](https://github.com/cashubtc/cdk)
 - **Configuration**: `config.toml`
+- **Note**: We found a race condition in CDK so you need to make sure to use this [fork of CDK](https://github.com/dtdannen/cdk) until a PR gets merged
 
 ### 3. Strfry Ecash Relay (`strfry-ecash`)
 - **Port**: 7788
@@ -139,18 +143,18 @@ docker compose down -v
 - **Technology**: Next.js 14, React, TypeScript, Tailwind CSS
 
 ### 6. DVM Echo (`dvm-echo`)
-- **Purpose**: Basic echo DVM using standard NIP-89
-- **Relay**: Plain relay (no payment required)
+- **Purpose**: Basic echo DVM as detailed here: https://habla.news/a/naddr1qvzqqqr4gupzpkscaxrqqs8nhaynsahuz6c6jy4wtfhkl2x4zkwrmc4cyvaqmxz3qqxnzde4xscrzwpexyerzdes85ynm8
+- **Relay**: Default Strfry relay (no payment required)
 - **Response**: Returns the input message
 
 ### 7. DVM Encrypted (`dvm-encrypted`)
 - **Purpose**: DVM using NIP-17 encrypted direct messages
-- **Relay**: Plain relay (no payment required)
+- **Relay**: Default Strfry relay (no payment required)
 - **Response**: Encrypted echo response
 
 ### 8. DVM Encrypted Ecash (`dvm-encrypted-ecash`)
 - **Purpose**: DVM using NIP-17 with ecash payment requirement
-- **Relay**: Ecash relay (payment required)
+- **Relay**: Strfry relay with ecash validation plugin (payment required)
 - **Cost**: 1 sat per request
 - **Response**: Encrypted echo response after payment validation
 
