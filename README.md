@@ -56,11 +56,11 @@ graph TB
     WEBAPP -->|ws://localhost:7788| RELAY_ECASH
     WEBAPP -->|ws://localhost:7789| RELAY_PLAIN
 
-    style MINT fill:#90EE90
-    style RELAY_ECASH fill:#FFB6C1
-    style RELAY_PLAIN fill:#ADD8E6
-    style WEBAPP fill:#DDA0DD
-    style DVM_ECASH fill:#FFD700
+    style MINT fill:#90EE90,color:#000
+    style RELAY_ECASH fill:#FFB6C1,color:#000
+    style RELAY_PLAIN fill:#ADD8E6,color:#000
+    style WEBAPP fill:#DDA0DD,color:#000
+    style DVM_ECASH fill:#FFD700,color:#000
 ```
 
 ## Quick Start
