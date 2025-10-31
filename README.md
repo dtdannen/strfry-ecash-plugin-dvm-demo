@@ -28,7 +28,7 @@ graph TB
         end
 
         subgraph "Relay Layer"
-            RELAY_ECASH[Strfry Ecash Relay<br/>:7788<br/>with validation plugin]
+            RELAY_ECASH[Strfry Ecash Relay<br/>:7788<br/>with ecash validation plugin]
             RELAY_PLAIN[Strfry Plain Relay<br/>:7789<br/>no plugin]
         end
 
